@@ -942,6 +942,14 @@ def commit(ctx: click.Context) -> None:
     # Run pre-commit hooks before invoking Claude.
     staged_files_output = repo.git.diff("--cached", "--name-only")
     staged_files = [f for f in staged_files_output.split("\n") if f]
+
+    # Warn user if hooks will be completely bypassed
+    if get_precommit_skip_env():
+        console.print(
+            "[yellow]⚠ Pre-commit hooks will be completely bypassed "
+            "(validation + commit phase)[/yellow]"
+        )
+
     hooks_passed, modified_files = run_precommit_hooks(repo, console, staged_files)
 
     if not hooks_passed:
@@ -1118,8 +1126,21 @@ def commit(ctx: click.Context) -> None:
             continue
 
     # Execute git commit
+    # Check if we should skip hooks during commit
+    skip_env = get_precommit_skip_env()
+    should_skip_hooks = bool(skip_env)
+
+    # Build commit command
+    commit_cmd = ["git", "commit"]
+    if should_skip_hooks:
+        commit_cmd.append("--no-verify")
+        console.print(
+            "[yellow]⚠ Committing with --no-verify (SKIP_PRECOMMIT is set)[/yellow]"
+        )
+    commit_cmd.extend(["--signoff", "-m", commit_message])
+
     result = subprocess.run(
-        ["git", "commit", "--signoff", "-m", commit_message],
+        commit_cmd,
         capture_output=True,
         text=True,
         cwd=repo.working_dir,
