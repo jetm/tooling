@@ -78,3 +78,22 @@ Intelligently switch to the main/default branch (stage/main/master) with automat
 Manual override: `git config branch-switch.name <branch>`
 
 Requires: Python >= 3.12, uv, GitPython, Rich
+
+## Skipping Pre-commit Hooks
+
+The `aca.py commit` command runs pre-commit hooks on staged files before committing. This ensures code passes validation before the commit is created.
+
+To bypass pre-commit hooks temporarily, set the `SKIP_PRECOMMIT` environment variable:
+
+```bash
+SKIP_PRECOMMIT=1 ./aca.py commit
+```
+
+**Note:** This is different from `git commit --no-verify`, which skips git hooks. The `SKIP_PRECOMMIT` variable specifically bypasses the pre-commit tool validation that `aca.py` runs.
+
+**Use cases:**
+- CI environments where hooks are run separately
+- Emergency fixes when hooks are temporarily broken
+- When hooks are known to pass but you want to skip re-running them
+
+**Warning:** Use sparingly to maintain code quality. Pre-commit hooks help catch issues early.

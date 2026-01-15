@@ -1318,6 +1318,57 @@ Describe the approach at a conceptual level, not the code changes.
 """
 
 
+def run_precommit_hooks(
+    repo: git.Repo, console: Console, staged_files: list[str]
+) -> bool:
+    """Run pre-commit hooks on staged files.
+
+    Args:
+        repo: Git repository object
+        console: Rich console for output
+        staged_files: List of staged file paths
+
+    Returns:
+        True if hooks pass or are skipped, False if hooks fail
+    """
+    # Check if SKIP_PRECOMMIT environment variable is set
+    if os.environ.get("SKIP_PRECOMMIT"):
+        console.print(
+            "[yellow]⚠ Skipping pre-commit hooks (SKIP_PRECOMMIT is set)[/yellow]"
+        )
+        return True
+
+    # Check if pre-commit is installed
+    if not shutil.which("pre-commit"):
+        console.print("[dim]pre-commit not found, skipping hook validation[/dim]")
+        return True
+
+    # No files to check
+    if not staged_files:
+        return True
+
+    # Run pre-commit on staged files
+    cmd = ["pre-commit", "run", "--files"] + staged_files
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        cwd=repo.working_dir,
+    )
+
+    if result.returncode == 0:
+        return True
+
+    # Display hook output on failure
+    console.print("\n[red bold]Pre-commit hooks failed:[/red bold]\n")
+    if result.stdout:
+        console.print(result.stdout)
+    if result.stderr:
+        console.print(f"[red]{result.stderr}[/red]")
+
+    return False
+
+
 def get_mr_template(
     current_branch: str, target_branch: str, ticket_number: str | None = None
 ) -> str:
@@ -1875,6 +1926,18 @@ def commit(ctx: click.Context) -> None:
         else:
             console.print("Invalid choice. Please enter 'e', 'c', or 'a'.")
             continue
+
+    # Run pre-commit hooks before committing
+    staged_files_output = repo.git.diff("--cached", "--name-only")
+    staged_files = [f for f in staged_files_output.split("\n") if f]
+    if not run_precommit_hooks(repo, console, staged_files):
+        print_error(
+            console, "Pre-commit hooks failed. Please fix the issues and try again."
+        )
+        console.print(
+            "[yellow]Tip: Set SKIP_PRECOMMIT=1 to bypass hooks temporarily[/yellow]"
+        )
+        sys.exit(1)
 
     # Execute git commit
     result = subprocess.run(
