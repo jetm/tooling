@@ -18,14 +18,14 @@ repos:
     hooks:
       - id: shfmt
         args: [-i, "2", -ci, -bn]
-        files: \.(sh|bash)$|^git-undo$|^git-switch-default-branch$
+        files: \.(sh|bash)$
 
   # Shellcheck - Shell script linting
   - repo: https://github.com/shellcheck-py/shellcheck-py
     rev: v0.11.0.1
     hooks:
       - id: shellcheck
-        files: \.(sh|bash)$|^git-undo$|^git-switch-default-branch$
+        files: \.(sh|bash)$
 
   # Local hooks - custom validation
   - repo: local
