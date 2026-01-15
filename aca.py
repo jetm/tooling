@@ -30,12 +30,15 @@ import sys
 import tempfile
 from datetime import datetime
 from pathlib import Path
+from typing import Any, cast
 
 import click
 import git
+import tomli
 from rich.console import Console
 
 from common_utils import (
+    RETRYABLE_EXCEPTIONS,
     ACAError,
     ClaudeAuthenticationError,
     ClaudeCLIError,
@@ -43,7 +46,6 @@ from common_utils import (
     ClaudeNetworkError,
     ClaudeRateLimitError,
     ClaudeTimeoutError,
-    RETRYABLE_EXCEPTIONS,
     check_claude_cli,
     check_dependency,
     check_network_connectivity,
@@ -124,8 +126,7 @@ def edit_in_editor(content: str, console: Console, file_suffix: str = ".txt") ->
         elif editor_cmd and source_name in ("config.toml", "$EDITOR", "$VISUAL"):
             # Warn user about invalid/missing editor in config or env var
             console.print(
-                f"[yellow]Warning:[/yellow] {source_name}={editor_cmd!r} "
-                f"not found or invalid, trying next option..."
+                f"[yellow]Warning:[/yellow] {source_name}={editor_cmd!r} not found or invalid, trying next option..."
             )
 
     if not editor_parts:
@@ -440,7 +441,7 @@ Describe the approach at a conceptual level, not the code changes.
 
 def run_precommit_hooks(
     repo: git.Repo, console: Console, staged_files: list[str]
-) -> bool:
+) -> tuple[bool, list[str]]:
     """Run pre-commit hooks on staged files.
 
     Honors SKIP_PRECOMMIT by translating it to pre-commit's native SKIP env var,
@@ -452,23 +453,25 @@ def run_precommit_hooks(
         staged_files: List of staged file paths
 
     Returns:
-        True if hooks pass or are skipped, False if hooks fail
+        Tuple of (success: bool, modified_files: list[str])
+        - success: True if hooks pass or are skipped, False if hooks fail
+        - modified_files: List of files modified by hooks (empty if none modified)
     """
     # Check if pre-commit is installed
     if not shutil.which("pre-commit"):
         console.print("[dim]pre-commit not found, skipping hook validation[/dim]")
-        return True
+        return True, []
 
     # No files to check
     if not staged_files:
-        return True
+        return True, []
 
     skip_env = get_precommit_skip_env()
     if skip_env:
         console.print(
             "[yellow]⚠ Skipping pre-commit hooks (SKIP_PRECOMMIT is set)[/yellow]"
         )
-        return True
+        return True, []
 
     # Run pre-commit on staged files
     cmd = ["pre-commit", "run", "--files"] + staged_files
@@ -481,8 +484,26 @@ def run_precommit_hooks(
         env=env,
     )
 
+    # Check which files were modified by hooks
+    modified_files: list[str] = []
+    try:
+        # Hook changes may be left unstaged OR staged (some hooks git-add).
+        # Scope detection to the files we asked pre-commit to run on, so
+        # unrelated working-copy edits don't cause false aborts.
+        unstaged_output = repo.git.diff("--name-only")
+        staged_output = repo.git.diff("--cached", "--name-only")
+
+        unstaged_changed = {f for f in unstaged_output.split("\n") if f.strip()}
+        staged_changed = {f for f in staged_output.split("\n") if f.strip()}
+        changed = unstaged_changed | staged_changed
+
+        staged_set = set(staged_files)
+        modified_files = sorted(changed & staged_set)
+    except Exception:
+        pass
+
     if result.returncode == 0:
-        return True
+        return True, modified_files
 
     # Display hook output on failure
     console.print("\n[red bold]Pre-commit hooks failed:[/red bold]\n")
@@ -491,7 +512,7 @@ def run_precommit_hooks(
     if result.stderr:
         console.print(f"[red]{result.stderr}[/red]")
 
-    return False
+    return False, modified_files
 
 
 def get_mr_template(
@@ -572,8 +593,7 @@ def handle_generation_error(
         console.print()
         if isinstance(error, RETRYABLE_EXCEPTIONS):
             console.print(
-                "[yellow]This appears to be a transient error. "
-                "You can retry or use a template.[/yellow]"
+                "[yellow]This appears to be a transient error. You can retry or use a template.[/yellow]"
             )
 
         try:
@@ -860,11 +880,6 @@ def commit(ctx: click.Context) -> None:
     if not check_dependency("git", console):
         sys.exit(1)
 
-    # Check Claude Code CLI
-    if not check_claude_cli(console):
-        sys.exit(1)
-    check_version_compatibility(console)
-
     # Initialize repository
     try:
         repo = git.Repo(search_parent_directories=True)
@@ -915,6 +930,45 @@ def commit(ctx: click.Context) -> None:
     if not diff_output.strip():
         print_error(console, "No staged changes found. Use 'git add' to stage changes.")
         sys.exit(1)
+
+    # Run pre-commit hooks before invoking Claude.
+    staged_files_output = repo.git.diff("--cached", "--name-only")
+    staged_files = [f for f in staged_files_output.split("\n") if f]
+    hooks_passed, modified_files = run_precommit_hooks(repo, console, staged_files)
+
+    if not hooks_passed:
+        print_error(
+            console, "Pre-commit hooks failed. Please fix the issues and try again."
+        )
+        console.print(
+            "[yellow]Tip: Set SKIP_PRECOMMIT=1 to bypass hooks temporarily[/yellow]"
+        )
+        sys.exit(1)
+
+    if modified_files:
+        console.print(
+            "\n[yellow bold]⚠ Pre-commit hooks modified files:[/yellow bold]\n"
+        )
+        for file in modified_files:
+            console.print(f"  • {file}")
+        console.print()
+        console.print(
+            "[cyan]The following files were automatically formatted or modified by hooks.[/cyan]"
+        )
+        console.print(
+            "[cyan]Please review the changes, stage them, and run 'aca commit' again.[/cyan]"
+        )
+        console.print()
+        console.print("[dim]Next steps:[/dim]")
+        console.print("  1. Review the modified files: git diff")
+        console.print("  2. Stage the changes: git add <files>")
+        console.print("  3. Run 'aca commit' again")
+        sys.exit(0)
+
+    # Check Claude Code CLI (after hooks have passed with no modifications)
+    if not check_claude_cli(console):
+        sys.exit(1)
+    check_version_compatibility(console)
 
     ticket_number = extract_ticket_number(branch_name)
 
@@ -1023,6 +1077,9 @@ def commit(ctx: click.Context) -> None:
         )
         sys.exit(1)
 
+    # Type narrowing for linters/type-checkers.
+    assert commit_message is not None
+
     # Display the generated message and prompt for action
     while True:
         console.print("\n[bold]Generated Commit Message:[/bold]\n")
@@ -1051,18 +1108,6 @@ def commit(ctx: click.Context) -> None:
         else:
             console.print("Invalid choice. Please enter 'e', 'c', or 'a'.")
             continue
-
-    # Run pre-commit hooks before committing
-    staged_files_output = repo.git.diff("--cached", "--name-only")
-    staged_files = [f for f in staged_files_output.split("\n") if f]
-    if not run_precommit_hooks(repo, console, staged_files):
-        print_error(
-            console, "Pre-commit hooks failed. Please fix the issues and try again."
-        )
-        console.print(
-            "[yellow]Tip: Set SKIP_PRECOMMIT=1 to bypass hooks temporarily[/yellow]"
-        )
-        sys.exit(1)
 
     # Execute git commit
     result = subprocess.run(
@@ -1122,6 +1167,7 @@ def mr_desc(ctx: click.Context) -> None:
             "    merge-branch = true",
         )
         sys.exit(1)
+    assert target_branch is not None
 
     # Validate branches
     if current_branch == target_branch:
@@ -1203,7 +1249,11 @@ def mr_desc(ctx: click.Context) -> None:
     )
 
     # Prepare fallback template for graceful degradation
-    fallback_template = get_mr_template(current_branch, target_branch, ticket_number)
+    # Some type-checkers don't narrow Optional args well here; an empty string
+    # behaves the same as None for our template logic.
+    fallback_template = get_mr_template(
+        current_branch, target_branch, ticket_number or ""
+    )
 
     # Generate MR description with retry and fallback support
     mr_content: str | None = None
@@ -1276,6 +1326,9 @@ def mr_desc(ctx: click.Context) -> None:
             "[yellow]Tip: Run 'aca doctor' to check your configuration.[/yellow]"
         )
         sys.exit(1)
+
+    # Type narrowing for linters/type-checkers.
+    assert mr_content is not None
 
     # Display the generated content and prompt for action
     while True:
@@ -1351,6 +1404,9 @@ def mr_desc(ctx: click.Context) -> None:
             console, "Could not parse title from generated content. Please try again."
         )
         sys.exit(1)
+
+    # Type narrowing for linters/type-checkers.
+    assert title is not None
 
     description = "\n".join(description_lines).strip()
     if not description:
@@ -1431,26 +1487,27 @@ def mr_desc(ctx: click.Context) -> None:
                 current_branch = new_branch_name
         else:
             console.print(
-                "[yellow]Skipping branch rename. "
-                "Local and remote branch names may differ from MR title.[/yellow]"
+                "[yellow]Skipping branch rename. Local and remote branch names may differ from MR title.[/yellow]"
             )
 
     # Execute glab command (branch has been renamed at this point if user confirmed)
     try:
+        title_str = cast(str, title)
+        glab_cmd: list[str] = [
+            "glab",
+            "mr",
+            "create",
+            "--title",
+            title_str,
+            "--description",
+            description,
+            "--target-branch",
+            target_branch,
+            "--draft",
+            "--remove-source-branch",
+        ]
         result = subprocess.run(
-            [
-                "glab",
-                "mr",
-                "create",
-                "--title",
-                title,
-                "--description",
-                description,
-                "--target-branch",
-                target_branch,
-                "--draft",
-                "--remove-source-branch",
-            ],
+            glab_cmd,
             capture_output=True,
             text=True,
             cwd=repo.working_dir,
