@@ -1,6 +1,6 @@
 #!/usr/bin/env -S uv run --script
 # /// script
-# requires-python = ">=3.12"
+# requires-python = ">=3.14"
 # dependencies = [
 #     "claude-agent-sdk>=0.1.0",
 #     "rich>=13.0.0",
@@ -87,9 +87,13 @@ class ACAConfig:
                 with open(config_path, "rb") as f:
                     data = tomli.load(f)
 
-                config.retry_attempts = data.get("retry_attempts", config.retry_attempts)
+                config.retry_attempts = data.get(
+                    "retry_attempts", config.retry_attempts
+                )
                 config.initial_delay = data.get("initial_delay", config.initial_delay)
-                config.backoff_factor = data.get("backoff_factor", config.backoff_factor)
+                config.backoff_factor = data.get(
+                    "backoff_factor", config.backoff_factor
+                )
                 config.max_delay = data.get("max_delay", config.max_delay)
                 config.timeout = data.get("timeout", config.timeout)
                 config.log_level = data.get("log_level", config.log_level)
@@ -135,7 +139,11 @@ def setup_logging(verbose: bool = False) -> None:
         verbose: If True, enables DEBUG level logging.
     """
     config = get_config()
-    level = logging.DEBUG if verbose else getattr(logging, config.log_level, logging.WARNING)
+    level = (
+        logging.DEBUG
+        if verbose
+        else getattr(logging, config.log_level, logging.WARNING)
+    )
 
     # Configure the root logger for the aca module
     handler = logging.StreamHandler(sys.stderr)
@@ -472,8 +480,12 @@ def retry_with_backoff(
     """
     config = get_config()
     _max_attempts = max_attempts if max_attempts is not None else config.retry_attempts
-    _initial_delay = initial_delay if initial_delay is not None else config.initial_delay
-    _backoff_factor = backoff_factor if backoff_factor is not None else config.backoff_factor
+    _initial_delay = (
+        initial_delay if initial_delay is not None else config.initial_delay
+    )
+    _backoff_factor = (
+        backoff_factor if backoff_factor is not None else config.backoff_factor
+    )
     _max_delay = max_delay if max_delay is not None else config.max_delay
 
     def decorator(func: F) -> F:
@@ -851,9 +863,7 @@ def rename_and_push_branch(
         # Branch exists, ask user
         try:
             confirm = (
-                input(
-                    f"Branch '{new_name}' already exists locally. Overwrite? [y/N]: "
-                )
+                input(f"Branch '{new_name}' already exists locally. Overwrite? [y/N]: ")
                 .strip()
                 .lower()
             )
@@ -1344,7 +1354,7 @@ Production impact, risks, dependencies, or required actions.
 
 <!--
 Branch: {current_branch} -> {target_branch}
-Ticket: {ticket_number or 'Not detected'}
+Ticket: {ticket_number or "Not detected"}
 -->
 """
 
@@ -1640,7 +1650,8 @@ Now analyze the commits and generate the MR title and description only."""
     help="Output plain text without formatting",
 )
 @click.option(
-    "--verbose", "-v",
+    "--verbose",
+    "-v",
     is_flag=True,
     help="Enable verbose/debug logging",
 )
@@ -1736,7 +1747,7 @@ def commit(ctx: click.Context) -> None:
 
 ## Git Context
 - Branch: {branch_name}
-- Ticket: {ticket_number or 'none'}
+- Ticket: {ticket_number or "none"}
 
 ## Staged Changes Diff
 {diff_output}
@@ -1785,7 +1796,8 @@ def commit(ctx: click.Context) -> None:
                 commit_message = edit_in_editor(result, console, ".txt")
                 # Strip comment lines from template
                 commit_message = "\n".join(
-                    line for line in commit_message.split("\n")
+                    line
+                    for line in commit_message.split("\n")
                     if not line.strip().startswith("#")
                 ).strip()
                 break
@@ -1803,7 +1815,8 @@ def commit(ctx: click.Context) -> None:
             if result is not None:
                 commit_message = edit_in_editor(result, console, ".txt")
                 commit_message = "\n".join(
-                    line for line in commit_message.split("\n")
+                    line
+                    for line in commit_message.split("\n")
                     if not line.strip().startswith("#")
                 ).strip()
                 break
@@ -1821,7 +1834,8 @@ def commit(ctx: click.Context) -> None:
             if result is not None:
                 commit_message = edit_in_editor(result, console, ".txt")
                 commit_message = "\n".join(
-                    line for line in commit_message.split("\n")
+                    line
+                    for line in commit_message.split("\n")
                     if not line.strip().startswith("#")
                 ).strip()
                 break
@@ -1957,7 +1971,9 @@ def mr_desc(ctx: click.Context) -> None:
     # Fall back to upstream tracking ref for current branch
     if not log_range:
         try:
-            upstream = repo.git.rev_parse("--abbrev-ref", f"{current_branch}@{{upstream}}")
+            upstream = repo.git.rev_parse(
+                "--abbrev-ref", f"{current_branch}@{{upstream}}"
+            )
             if upstream:
                 log_range = f"{upstream}..{current_branch}"
                 log_base = upstream
@@ -2193,20 +2209,20 @@ def mr_desc(ctx: click.Context) -> None:
 
     # Offer branch rename if we have a new name and it differs from current
     if new_branch_name and new_branch_name != current_branch:
-        console.print(f"\n[bold]Branch Rename:[/bold]")
+        console.print("\n[bold]Branch Rename:[/bold]")
         console.print(f"  Current: {current_branch}")
         console.print(f"  New:     {new_branch_name}")
 
         try:
-            rename_choice = (
-                input("Rename branch? [Y/n]: ").strip().lower()
-            )
+            rename_choice = input("Rename branch? [Y/n]: ").strip().lower()
         except (EOFError, KeyboardInterrupt):
             console.print("\nAborted.")
             sys.exit(0)
 
         if rename_choice in ("", "y", "yes"):
-            if not rename_and_push_branch(repo, current_branch, new_branch_name, console):
+            if not rename_and_push_branch(
+                repo, current_branch, new_branch_name, console
+            ):
                 print_error(
                     console,
                     "Branch rename failed. You can continue with the current branch "
@@ -2410,7 +2426,9 @@ def doctor(ctx: click.Context, full: bool, export: bool) -> None:
                 console.print("[green]✓[/green] Authenticated (via credentials file)")
                 record_check("authentication", True, "Credentials file")
             else:
-                console.print("[yellow]⚠[/yellow] Credentials file exists but appears empty")
+                console.print(
+                    "[yellow]⚠[/yellow] Credentials file exists but appears empty"
+                )
                 record_check("authentication", False, "Empty credentials file")
                 all_passed = False
         except json.JSONDecodeError:
@@ -2455,7 +2473,9 @@ def doctor(ctx: click.Context, full: bool, export: bool) -> None:
         record_check("network", True, "Connected")
     else:
         console.print(f"[red]✗ {network_error}[/red]")
-        console.print("  [yellow]Check your internet connection and firewall settings[/yellow]")
+        console.print(
+            "  [yellow]Check your internet connection and firewall settings[/yellow]"
+        )
         record_check("network", False, network_error or "Unknown error")
         all_passed = False
 
@@ -2465,7 +2485,7 @@ def doctor(ctx: click.Context, full: bool, export: bool) -> None:
     if config_path.exists():
         try:
             with open(config_path, "rb") as f:
-                config_data = tomli.load(f)
+                tomli.load(f)  # Validate TOML syntax
             console.print(f"[green]✓[/green] Config file found ({config_path})")
             record_check("config_file", True, str(config_path))
 
@@ -2487,10 +2507,26 @@ def doctor(ctx: click.Context, full: bool, export: bool) -> None:
     # Check environment variables
     console.print("\n[bold]Environment Variables:[/bold]")
     env_vars = [
-        ("ANTHROPIC_API_KEY", bool(os.environ.get("ANTHROPIC_API_KEY")), "Set" if os.environ.get("ANTHROPIC_API_KEY") else "Not set"),
-        ("ACA_TIMEOUT", bool(os.environ.get("ACA_TIMEOUT")), os.environ.get("ACA_TIMEOUT", "Not set")),
-        ("ACA_RETRY_ATTEMPTS", bool(os.environ.get("ACA_RETRY_ATTEMPTS")), os.environ.get("ACA_RETRY_ATTEMPTS", "Not set")),
-        ("ACA_LOG_LEVEL", bool(os.environ.get("ACA_LOG_LEVEL")), os.environ.get("ACA_LOG_LEVEL", "Not set")),
+        (
+            "ANTHROPIC_API_KEY",
+            bool(os.environ.get("ANTHROPIC_API_KEY")),
+            "Set" if os.environ.get("ANTHROPIC_API_KEY") else "Not set",
+        ),
+        (
+            "ACA_TIMEOUT",
+            bool(os.environ.get("ACA_TIMEOUT")),
+            os.environ.get("ACA_TIMEOUT", "Not set"),
+        ),
+        (
+            "ACA_RETRY_ATTEMPTS",
+            bool(os.environ.get("ACA_RETRY_ATTEMPTS")),
+            os.environ.get("ACA_RETRY_ATTEMPTS", "Not set"),
+        ),
+        (
+            "ACA_LOG_LEVEL",
+            bool(os.environ.get("ACA_LOG_LEVEL")),
+            os.environ.get("ACA_LOG_LEVEL", "Not set"),
+        ),
         ("EDITOR", bool(os.environ.get("EDITOR")), os.environ.get("EDITOR", "Not set")),
         ("VISUAL", bool(os.environ.get("VISUAL")), os.environ.get("VISUAL", "Not set")),
     ]
@@ -2503,8 +2539,7 @@ def doctor(ctx: click.Context, full: bool, export: bool) -> None:
         console.print(f"  {status} {var_name}: {display_value}")
 
     diagnostic_info["environment"] = {
-        var_name: ("Set" if is_set else "Not set")
-        for var_name, is_set, _ in env_vars
+        var_name: ("Set" if is_set else "Not set") for var_name, is_set, _ in env_vars
     }
 
     # Version compatibility info

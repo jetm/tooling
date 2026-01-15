@@ -1,0 +1,45 @@
+default_language_version:
+  python: python3
+
+fail_fast: false
+
+repos:
+  # Ruff - Python linting & formatting
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.14.11
+    hooks:
+      - id: ruff-format
+      - id: ruff
+        args: [--fix]
+
+  # Shfmt - Shell script formatting
+  - repo: https://github.com/scop/pre-commit-shfmt
+    rev: v3.12.0-2
+    hooks:
+      - id: shfmt
+        args: [-i, "2", -ci, -bn]
+        files: \.(sh|bash)$|^git-undo$|^git-switch-default-branch$
+
+  # Shellcheck - Shell script linting
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.11.0.1
+    hooks:
+      - id: shellcheck
+        files: \.(sh|bash)$|^git-undo$|^git-switch-default-branch$
+
+  # Local hooks - custom validation
+  - repo: local
+    hooks:
+      - id: chezmoi-verify
+        name: Verify chezmoi configuration
+        entry: chezmoi verify
+        language: system
+        files: \.(tmpl|toml)$|^\.chezmoi
+        pass_filenames: false
+
+      - id: validate-python-version
+        name: Validate Python version in uv scripts
+        entry: python3 validate-python-version.py
+        language: system
+        files: \.py$
+        pass_filenames: true

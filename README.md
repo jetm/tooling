@@ -8,6 +8,8 @@ Requires Python >= 3.12 and [uv](https://docs.astral.sh/uv/). Scripts are execut
 ./aca.py --help
 ./gitlab-mr-comments.py --help
 python3 ./find_related_commits.py --help
+./git-switch-main.py
+./git-undo --help
 ```
 
 ## Tools
@@ -44,3 +46,35 @@ Fetch unresolved MR discussion threads with code context (for LLM consumption).
 export GITLAB_TOKEN=<token>
 ./gitlab-mr-comments.py --mr-url https://gitlab.com/group/project/-/merge_requests/123
 ```
+
+### git-undo
+
+Undo git commits with soft or hard reset, with safety checks to prevent data loss.
+
+```bash
+./git-undo           # soft reset last commit, keep changes staged
+./git-undo 3         # soft reset last 3 commits
+./git-undo --soft 2  # soft reset, unstage changes
+./git-undo --hard 1  # hard reset, discard changes - prompts for confirmation
+```
+
+Note: Prevents hard reset of all commits to avoid repository corruption.
+
+### git-switch-main.py
+
+Intelligently switch to the main/default branch (stage/main/master) with automatic stashing.
+
+**Features:**
+- Auto-detects main branch via origin/HEAD or common names
+- Caches detected branch in git config (`branch-switch.name`)
+- Automatically stashes uncommitted changes (including untracked files)
+- Restores stash after successful branch switch
+- Creates local tracking branch if needed
+
+```bash
+./git-switch-main.py
+```
+
+Manual override: `git config branch-switch.name <branch>`
+
+Requires: Python >= 3.12, uv, GitPython, Rich

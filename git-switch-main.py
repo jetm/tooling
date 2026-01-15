@@ -1,6 +1,6 @@
 #!/usr/bin/env -S uv run --script
 # /// script
-# requires-python = ">=3.12"
+# requires-python = ">=3.14"
 # dependencies = [
 #     "gitpython>=3.1.0",
 #     "rich>=13.0.0",
@@ -30,7 +30,6 @@ Configuration:
 
 import sys
 from datetime import datetime
-from pathlib import Path
 
 import git
 from rich.console import Console
@@ -147,9 +146,7 @@ def detect_main_branch(repo: git.Repo) -> str | None:
 
     if len(unique_candidates) == 1:
         selected = unique_candidates[0]
-        console.print(
-            f"[green]✓[/green] Detected main branch: [bold]{selected}[/bold]"
-        )
+        console.print(f"[green]✓[/green] Detected main branch: [bold]{selected}[/bold]")
         # Save to config
         with repo.config_writer() as config:
             config.set_value("branch-switch", "name", selected)

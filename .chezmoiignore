@@ -4,3 +4,5 @@ LICENSE
 .gitignore
 .chezmoi.toml.tmpl
 .chezmoiignore
+validate-python-version.py
+.pre-commit-config.yaml

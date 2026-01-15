@@ -1,6 +1,6 @@
 #!/usr/bin/env -S uv run --script
 # /// script
-# requires-python = ">=3.12"
+# requires-python = ">=3.14"
 # dependencies = [
 #     "python-gitlab>=4.0.0",
 #     "rich>=13.0.0",
