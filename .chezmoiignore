@@ -1,5 +1,6 @@
 README.md
 LICENSE
+CLAUDE.md
 .git
 .gitignore
 .chezmoi.toml.tmpl
@@ -11,4 +12,4 @@ __pycache__
 
 # Python scripts (these are the targets, not chezmoi sources)
 *.py
-git-undo
+git-undo.sh
