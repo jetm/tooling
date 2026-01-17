@@ -898,8 +898,8 @@ def commit(ctx: click.Context) -> None:
     try:
         branch_name = repo.active_branch.name
     except TypeError:
-        print_error(console, "Not on a branch (detached HEAD state)")
-        sys.exit(1)
+        # Detached HEAD - use short commit SHA as identifier
+        branch_name = repo.head.commit.hexsha[:7]
 
     try:
         diff_output = repo.git.diff("--cached")
