@@ -317,31 +317,17 @@ def rename_and_push_branch(repo: git.Repo, old_name: str, new_name: str, console
 
 
 def get_target_branch_from_config(repo: git.Repo) -> str | None:
-    """Parse git config to find branch with merge-branch = true.
+    """Get the target branch for MR from git config.
 
-    Handles both regular repos and worktrees by using repo.git_dir
-    to resolve the actual git directory location.
+    Reads the branch-switch.name config value, which is set by git-switch-main.py
+    when detecting/caching the main branch.
     """
-    # Use repo.git_dir which correctly resolves the actual git directory,
-    # whether this is a regular repo (.git/) or a worktree (.git file pointing elsewhere)
-    config_file = Path(repo.git_dir) / "config"
-
-    if not config_file.exists():
-        return None
-
-    current_branch = None
-    with open(config_file) as f:
-        for line in f:
-            # Match branch section header
-            branch_match = re.match(r'^\[branch "(.+)"\]$', line.strip())
-            if branch_match:
-                current_branch = branch_match.group(1)
-                continue
-
-            # Match merge-branch = true
-            if re.match(r"^\s*merge-branch\s*=\s*true\s*$", line):
-                if current_branch:
-                    return current_branch
+    try:
+        main_branch = repo.config_reader().get_value("branch-switch", "name")
+        if main_branch:
+            return str(main_branch)
+    except Exception:
+        pass
 
     return None
 
@@ -452,6 +438,12 @@ def run_precommit_hooks(repo: git.Repo, console: Console, staged_files: list[str
     # Check if pre-commit is installed
     if not shutil.which("pre-commit"):
         console.print("[dim]pre-commit not found, skipping hook validation[/dim]")
+        return True, []
+
+    # Check if .pre-commit-config.yaml exists in the repo
+    config_path = Path(repo.working_dir) / ".pre-commit-config.yaml"
+    if not config_path.is_file():
+        console.print("[dim]No .pre-commit-config.yaml found, skipping hook validation[/dim]")
         return True, []
 
     # No files to check
@@ -1136,9 +1128,9 @@ def mr_desc(ctx: click.Context) -> None:
     if not target_branch:
         print_error(
             console,
-            "No target branch found in .git/config with 'merge-branch = true'\n"
-            "Add this to your target branch section in .git/config:\n"
-            "    merge-branch = true",
+            "No target branch configured.\n"
+            "Run 'git-switch-main.py' to detect and cache the main branch, or set manually:\n"
+            "  git config branch-switch.name <branch-name>",
         )
         sys.exit(1)
     assert target_branch is not None
