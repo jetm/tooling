@@ -106,6 +106,10 @@ class ACAConfig:
     log_level: str = "WARNING"
     editor: str | None = None
     default_model: str = "sonnet"
+    # Diff compression settings
+    diff_size_threshold_bytes: int = 50_000  # 50KB
+    diff_files_threshold: int = 100
+    diff_compression_enabled: bool = True
 
     @classmethod
     def load(cls) -> ACAConfig:
@@ -127,6 +131,12 @@ class ACAConfig:
                 config.log_level = data.get("log_level", config.log_level)
                 config.editor = data.get("editor", config.editor)
                 config.default_model = data.get("default_model", config.default_model)
+                # Diff compression settings
+                config.diff_size_threshold_bytes = data.get(
+                    "diff_size_threshold_bytes", config.diff_size_threshold_bytes
+                )
+                config.diff_files_threshold = data.get("diff_files_threshold", config.diff_files_threshold)
+                config.diff_compression_enabled = data.get("diff_compression_enabled", config.diff_compression_enabled)
             except Exception as e:
                 logger.warning(f"Failed to load config file {config_path}: {e}")
 
@@ -148,6 +158,27 @@ class ACAConfig:
 
         if env_model := os.environ.get("ACA_DEFAULT_MODEL"):
             config.default_model = env_model
+
+        # Diff compression environment variable overrides
+        if env_size_threshold := os.environ.get("ACA_DIFF_SIZE_THRESHOLD"):
+            try:
+                config.diff_size_threshold_bytes = int(env_size_threshold)
+            except ValueError:
+                logger.warning(f"Invalid ACA_DIFF_SIZE_THRESHOLD value: {env_size_threshold}")
+
+        if env_files_threshold := os.environ.get("ACA_DIFF_FILES_THRESHOLD"):
+            try:
+                config.diff_files_threshold = int(env_files_threshold)
+            except ValueError:
+                logger.warning(f"Invalid ACA_DIFF_FILES_THRESHOLD value: {env_files_threshold}")
+
+        if env_compression := os.environ.get("ACA_DIFF_COMPRESSION_ENABLED"):
+            config.diff_compression_enabled = env_compression.lower() in (
+                "1",
+                "true",
+                "yes",
+                "on",
+            )
 
         return config
 

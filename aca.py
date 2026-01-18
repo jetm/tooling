@@ -17,6 +17,24 @@ using the Claude Agent SDK.
 
 Generated content can be edited using your $EDITOR before committing or
 creating MRs. Editor fallback chain: $EDITOR -> $VISUAL -> nano -> vi.
+
+Diff Size Analysis
+------------------
+Large diffs are automatically detected and a warning is displayed when
+compression will be applied. This helps manage prompt size for better
+AI performance.
+
+Configuration options in ~/.config/aca/config.toml:
+
+    # Diff compression settings
+    diff_size_threshold_bytes = 50000  # 50KB - threshold to trigger compression
+    diff_files_threshold = 100         # File count threshold
+    diff_compression_enabled = true    # Enable/disable compression warnings
+
+Environment variable overrides:
+    ACA_DIFF_SIZE_THRESHOLD      - Override size threshold (bytes)
+    ACA_DIFF_FILES_THRESHOLD     - Override file count threshold
+    ACA_DIFF_COMPRESSION_ENABLED - Enable/disable (1/true/yes/on)
 """
 
 import asyncio
@@ -39,6 +57,7 @@ from rich.console import Console
 
 from common_utils import (
     RETRYABLE_EXCEPTIONS,
+    ACAConfig,
     ACAError,
     ClaudeAuthenticationError,
     ClaudeCLIError,
@@ -501,6 +520,116 @@ def run_precommit_hooks(repo: git.Repo, console: Console, staged_files: list[str
     return False, modified_files
 
 
+def calculate_diff_size(diff_output: str, repo: git.Repo | None = None) -> dict[str, int]:
+    """Calculate size metrics for a git diff output.
+
+    Args:
+        diff_output: Raw git diff output string
+        repo: Optional GitPython Repo object for accurate file count via --name-only
+
+    Returns:
+        Dictionary with keys:
+        - bytes: Total byte size of the diff (UTF-8 encoded)
+        - chars: Total character count of the diff
+        - lines: Total line count
+        - files: Number of changed files (from --name-only if repo provided, else regex fallback)
+
+    Example:
+        >>> metrics = calculate_diff_size(diff_output, repo)
+        >>> print(f"Size: {metrics['bytes']} bytes, {metrics['files']} files")
+    """
+    # Calculate file count using --name-only if repo is available (more accurate)
+    if repo is not None:
+        try:
+            name_only_output = repo.git.diff("--cached", "--name-only")
+            file_count = len(name_only_output.strip().split("\n")) if name_only_output.strip() else 0
+        except git.exc.GitCommandError:
+            # Fall back to regex-based counting
+            import re
+
+            file_count = len(re.findall(r"^diff --git", diff_output, re.MULTILINE))
+    else:
+        import re
+
+        file_count = len(re.findall(r"^diff --git", diff_output, re.MULTILINE))
+
+    return {
+        "bytes": len(diff_output.encode("utf-8")),
+        "chars": len(diff_output),
+        "lines": diff_output.count("\n"),
+        "files": file_count,
+    }
+
+
+def extract_diff_statistics(repo: git.Repo) -> dict[str, int]:
+    """Extract insertion/deletion statistics from staged changes.
+
+    Args:
+        repo: GitPython Repo object
+
+    Returns:
+        Dictionary with keys:
+        - insertions: Number of lines added
+        - deletions: Number of lines removed
+        - files_changed: Number of files changed
+
+    Example:
+        >>> stats = extract_diff_statistics(repo)
+        >>> print(f"Changes: +{stats['insertions']} -{stats['deletions']}")
+    """
+    import re
+
+    result = {"insertions": 0, "deletions": 0, "files_changed": 0}
+
+    try:
+        stat_output = repo.git.diff("--cached", "--stat")
+        if not stat_output.strip():
+            return result
+
+        # Parse the summary line (e.g., "3 files changed, 10 insertions(+), 5 deletions(-)")
+        # The summary is typically the last non-empty line
+        lines = stat_output.strip().split("\n")
+        summary_line = lines[-1] if lines else ""
+
+        # Extract files changed
+        files_match = re.search(r"(\d+)\s+files?\s+changed", summary_line)
+        if files_match:
+            result["files_changed"] = int(files_match.group(1))
+
+        # Extract insertions
+        ins_match = re.search(r"(\d+)\s+insertions?\(\+\)", summary_line)
+        if ins_match:
+            result["insertions"] = int(ins_match.group(1))
+
+        # Extract deletions
+        del_match = re.search(r"(\d+)\s+deletions?\(-\)", summary_line)
+        if del_match:
+            result["deletions"] = int(del_match.group(1))
+
+    except git.exc.GitCommandError:
+        logger.debug("Failed to get diff statistics", exc_info=True)
+
+    return result
+
+
+def should_compress_diff(diff_size: dict[str, int], config: ACAConfig) -> bool:
+    """Determine if diff compression should be applied based on thresholds.
+
+    Args:
+        diff_size: Dictionary from calculate_diff_size() with 'bytes' and 'files' keys
+        config: ACAConfig instance with threshold settings
+
+    Returns:
+        True if either size or file count exceeds configured thresholds,
+        False otherwise
+
+    Example:
+        >>> if should_compress_diff(diff_size, config):
+        ...     print("Compression will be applied")
+    """
+    return diff_size["bytes"] > config.diff_size_threshold_bytes or diff_size["files"] > config.diff_files_threshold
+
+
 def get_mr_template(current_branch: str, target_branch: str, ticket_number: str | None = None) -> str:
     """Get a fallback MR description template.
 
@@ -936,6 +1065,28 @@ def commit(ctx: click.Context) -> None:
     if not check_claude_cli(console):
         sys.exit(1)
     check_version_compatibility(console)
+
+    # Check diff size and warn user if compression will be applied
+    # Compression strategies are implemented in subsequent phases
+    diff_size = calculate_diff_size(diff_output, repo)
+    diff_stats = extract_diff_statistics(repo)
+    config = get_config()
+    needs_compression = should_compress_diff(diff_size, config)
+
+    if needs_compression and config.diff_compression_enabled:
+        size_kb = diff_size["bytes"] / 1024
+        threshold_kb = config.diff_size_threshold_bytes / 1024
+        console.print()
+        console.print("[yellow bold]⚠ Large diff detected[/yellow bold]")
+        console.print()
+        console.print(f"Size: {size_kb:.1f} KB, Files: {diff_size['files']}, Lines: {diff_size['lines']}")
+        console.print(f"Changes: +{diff_stats['insertions']} -{diff_stats['deletions']}")
+        console.print()
+        console.print("Diff compression will be applied to reduce prompt size.")
+        console.print(f"Thresholds: {threshold_kb:.0f} KB or {config.diff_files_threshold} files")
+        console.print()
+    else:
+        logger.debug(f"Diff size within limits: {diff_size['bytes'] / 1024:.1f} KB, {diff_size['files']} files")
 
     ticket_number = extract_ticket_number(branch_name)
 
