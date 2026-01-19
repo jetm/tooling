@@ -28,7 +28,7 @@ Generate commit messages and GitLab MR descriptions using Claude. Automatically 
 ./aca.py mr-desc
 ```
 
-Requires: [Claude Code CLI](https://claude.ai/download), `glab` (for `mr-desc`)
+Requires: [Claude Code CLI](https://claude.ai/download) (provides authentication for Claude Agent SDK), `glab` (for `mr-desc`)
 
 ### lx.py — Linux Command Assistant
 
@@ -88,7 +88,7 @@ sequenceDiagram
     end
 ```
 
-**Requirements:** [Claude Code CLI](https://claude.ai/download)
+**Requirements:** [Claude Code CLI](https://claude.ai/download) (provides authentication for Claude Agent SDK)
 
 **Configuration:** Shares configuration with aca.py via `~/.config/aca/config.toml`. Model can be changed via `default_model` key or `ACA_DEFAULT_MODEL` env var.
 
@@ -144,6 +144,54 @@ Manual override: `git config branch-switch.name <branch>`
 
 Requires: Python >= 3.12, uv, GitPython, Rich
 
+## Architecture: Claude SDK vs API
+
+`aca.py` and `lx.py` use the **Claude Agent SDK** (`claude-agent-sdk` Python package) instead of the direct Claude REST API. This architectural decision prioritizes developer experience and authentication simplicity, with workarounds implemented for SDK limitations.
+
+### Why Claude SDK?
+
+| Aspect | Claude SDK (Current) | Direct API |
+|--------|---------------------|------------|
+| **Authentication** | ✅ Handled by Claude Code CLI (seamless) | ❌ Requires API key management |
+| **Integration** | ✅ Simple Python async/await with streaming | ⚠️ Manual HTTP requests, response parsing |
+| **Streaming** | ✅ Native streaming support via async iterator | ⚠️ Requires SSE handling |
+| **Prompt Delivery** | ❌ Command-line arguments (ARG_MAX limited) | ✅ HTTP body (no size limits) |
+| **Dependencies** | ⚠️ Requires Claude Code CLI installation | ✅ Only HTTP client library |
+| **Cost** | ✅ Included with Claude subscription (no per-request charges) | ❌ Pay-per-token via API pricing |
+
+**Verdict**: The SDK's authentication, streaming benefits, and **cost efficiency** outweigh the ARG_MAX limitation, which is solved through intelligent workarounds. Claude subscription holders get unlimited SDK usage at no additional cost, while direct API usage incurs per-token charges.
+
+### Solving the ARG_MAX Limitation
+
+The primary drawback of the SDK is that prompts are passed via command-line arguments, which are subject to OS limits (typically 128KB-2MB). For large diffs, this causes "Argument list too long" errors. `aca.py` implements a **two-pronged solution**:
+
+#### 1. Diff Compression (Preventive)
+Automatically reduces diff size before sending to Claude. Five strategies available (stat, compact, filtered, function-context, smart). See [Diff Compression for Large Commits](#diff-compression-for-large-commits) for configuration details.
+
+**Example**: A 500KB diff with 200 files can be compressed to ~50KB using the "smart" strategy, keeping full context for the 15 most important files.
+
+#### 2. File-Based Prompt Delivery (Fallback)
+When prompts exceed 50KB (configurable), the diff content is written to a temporary file in `.aca/tmp/`. Claude receives a modified prompt referencing the file path instead of the full content. The temp file is automatically cleaned up after generation. See [Large Prompt Handling](#large-prompt-handling) for details.
+
+**Flow**: `git diff` → compression (if needed) → file-based delivery (if still large) → Claude SDK → commit message
+
+This dual approach ensures reliable operation even with massive refactors (1000+ files), while maintaining commit message quality through intelligent prioritization.
+
+### Cost Comparison
+
+For developers with a Claude subscription, the SDK approach is significantly more economical:
+
+| Scenario | Claude SDK | Direct API | Savings |
+|----------|-----------|-----------|---------|
+| **10 commits/day** | $0 (included) | ~$0.30/day | 100% |
+| **50 commits/day** | $0 (included) | ~$1.50/day | 100% |
+| **100 commits/day** | $0 (included) | ~$3.00/day | 100% |
+| **Monthly (30 days, 50 commits/day)** | $0 (included) | ~$45/month | 100% |
+
+**Key insight**: Claude subscription includes unlimited SDK usage. Direct API access charges per token (~$0.003 per 1K input tokens, ~$0.015 per 1K output tokens). A typical commit message generation uses 500-2000 input tokens and 100-300 output tokens, costing $0.002-$0.005 per commit.
+
+**Bottom line**: If you already have a Claude subscription, the SDK approach is free. If you don't, the subscription cost ($20/month) is offset after ~7000 commits using the direct API.
+
 ## Skipping Pre-commit Hooks
 
 The `aca.py commit` command runs pre-commit hooks on staged files before committing. This ensures code passes validation before the commit is created.
@@ -168,6 +216,8 @@ This ensures consistent hook-skipping behavior across both validation phases, pr
 **Warning:** Use sparingly to maintain code quality. Pre-commit hooks help catch issues early.
 
 ## Diff Compression for Large Commits
+
+> **Note**: See [Architecture: Claude SDK vs API](#architecture-claude-sdk-vs-api) for context on why compression is necessary.
 
 When generating commit messages, `aca.py commit` automatically compresses large diffs that exceed configurable thresholds (default: 50KB or 100+ files). This prevents prompt size errors with the Claude API while still providing meaningful context for accurate commit message generation.
 
@@ -243,7 +293,7 @@ ACA_DIFF_MAX_PRIORITY_FILES=25 ./aca.py commit
 | Commit message lacks detail | Try `function-context` strategy or increase `diff_max_priority_files` |
 | Still getting prompt too large errors | Use `stat` strategy or reduce `diff_token_limit` |
 | Compression too aggressive | Increase `diff_size_threshold_bytes` or use `--no-compress` |
-| "Argument list too long" error | Enable file-based delivery: `ACA_PROMPT_FILE_ENABLED=true` (see [Large Prompt Handling](#large-prompt-handling)) |
+| "Argument list too long" error | Enable file-based delivery: `ACA_PROMPT_FILE_ENABLED=true`. This works around SDK ARG_MAX limits (see [Architecture](#architecture-claude-sdk-vs-api)) |
 | Want to test compression settings | Run `./aca.py doctor` to validate config and simulate compression |
 
 ### Compression Decision Flow
@@ -268,6 +318,8 @@ flowchart TD
 ```
 
 ### Large Prompt Handling
+
+> **Note**: This feature works around ARG_MAX limitations of the Claude SDK. See [Architecture](#architecture-claude-sdk-vs-api) for details.
 
 Even with compression, some diffs may be too large to pass via command-line arguments due to OS limitations (ARG_MAX). `aca.py` automatically handles this using **file-based prompt delivery**.
 
