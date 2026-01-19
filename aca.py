@@ -530,6 +530,65 @@ def run_precommit_hooks(repo: git.Repo, console: Console, staged_files: list[str
     return False, modified_files
 
 
+# =============================================================================
+# Diff Compression Module
+# =============================================================================
+#
+# This module provides intelligent diff compression for large commits to ensure
+# the Claude prompt stays within reasonable size limits while preserving the
+# most important context for commit message generation.
+#
+# ## Compression Flow in commit()
+#
+# 1. **Diff Size Check**: calculate_diff_size() computes byte/line/file counts
+# 2. **Threshold Evaluation**: should_compress_diff() checks against config thresholds
+#    - Default: 50KB or 100 files triggers compression
+# 3. **Strategy Selection**: config.diff_compression_strategy determines approach
+# 4. **Compression Application**: apply_compression_strategy() transforms the diff
+# 5. **Validation**: Compressed output is validated for completeness
+# 6. **Fallback**: On any failure, original diff is used with appropriate logging
+#
+# ## Available Strategies
+#
+# - **stat**: Maximum compression. Shows only file-level statistics (--stat).
+#   Use when: Diff is very large, commit message only needs high-level overview
+#
+# - **compact**: Moderate compression. Reduces context to 1 line (-U1).
+#   Use when: Need to see actual changes but context is less important
+#
+# - **filtered**: Excludes generated/binary files via pattern matching.
+#   Use when: Many non-essential files are inflating the diff
+#
+# - **function-context**: Shows complete functions where changes occurred.
+#   Use when: Understanding function-level context is important
+#
+# - **smart** (default): Hybrid approach. Full diff for priority source files
+#   (10-15 files), statistical summary for remaining files.
+#   Use when: Balance between detail and size is needed
+#
+# ## Configuration Options
+#
+# Config file (~/.config/aca/config.toml):
+#   diff_compression_enabled = true         # Enable/disable compression
+#   diff_compression_strategy = "smart"     # Strategy name
+#   diff_size_threshold_bytes = 51200       # 50KB threshold
+#   diff_files_threshold = 100              # File count threshold
+#   diff_token_limit = 100000               # Character limit for smart strategy
+#
+# Environment variables (override config):
+#   ACA_DIFF_COMPRESSION_ENABLED=true/false
+#   ACA_DIFF_COMPRESSION_STRATEGY=stat|compact|filtered|function-context|smart
+#
+# ## Troubleshooting
+#
+# - Compression too aggressive? Try "function-context" or increase token_limit
+# - Still too large? Use "stat" strategy for maximum compression
+# - Unexpected results? Check logs with --verbose, look for compression warnings
+# - Generation failures? Try ACA_DIFF_COMPRESSION_ENABLED=false to rule out compression
+#
+# =============================================================================
+
+
 def calculate_diff_size(diff_output: str, repo: git.Repo | None = None) -> dict[str, int]:
     """Calculate size metrics for a git diff output.
 
@@ -1680,6 +1739,10 @@ def commit(ctx: click.Context) -> None:
     if needs_compression and compression_commit_phase_enabled:
         size_kb = diff_size["bytes"] / 1024
         threshold_kb = config.diff_size_threshold_bytes / 1024
+        logger.debug(
+            f"Compression threshold check: size={size_kb:.1f}KB, files={diff_size['files']}, "
+            f"thresholds={threshold_kb:.0f}KB/{config.diff_files_threshold} files"
+        )
         console.print()
         console.print("[yellow bold]⚠ Large diff detected[/yellow bold]")
         console.print()
@@ -1687,24 +1750,141 @@ def commit(ctx: click.Context) -> None:
         console.print(f"Changes: +{diff_stats['insertions']} -{diff_stats['deletions']}")
         console.print()
 
-        # Apply compression strategy
+        # Apply compression strategy with error recovery
         strategy = config.diff_compression_strategy
-        final_diff, compression_info = apply_compression_strategy(repo, strategy, diff_output, config)
+        logger.debug(f"Selected compression strategy: {strategy}")
 
-        # Display compression results
-        compression_summary = format_compression_info(compression_info)
-        console.print(f"Compression applied: {compression_summary}")
-        console.print(f"Thresholds: {threshold_kb:.0f} KB or {config.diff_files_threshold} files")
-        console.print()
+        try:
+            final_diff, compression_info = apply_compression_strategy(repo, strategy, diff_output, config)
 
-        # Add note to prompt about diff format only if compression was actually applied
+            # Validate compression output
+            if compression_info is None:
+                logger.warning("Compression returned None info, falling back to original diff")
+                console.print("[yellow]⚠ Compression produced no metadata, using original diff[/yellow]")
+                final_diff = diff_output
+                compression_info = {
+                    "strategy": "none",
+                    "original_size": len(diff_output.encode("utf-8")),
+                    "compressed_size": len(diff_output.encode("utf-8")),
+                    "files_included": 0,
+                    "files_excluded": 0,
+                }
+
+            # Validate required keys exist
+            required_keys = {"strategy", "original_size", "compressed_size"}
+            if not required_keys.issubset(compression_info.keys()):
+                missing = required_keys - compression_info.keys()
+                logger.warning(f"Compression info missing keys {missing}, falling back to original diff")
+                console.print("[yellow]⚠ Compression metadata incomplete, using original diff[/yellow]")
+                final_diff = diff_output
+                compression_info = {
+                    "strategy": "none",
+                    "original_size": len(diff_output.encode("utf-8")),
+                    "compressed_size": len(diff_output.encode("utf-8")),
+                    "files_included": 0,
+                    "files_excluded": 0,
+                }
+
+            # Handle empty diff after compression (edge case: all files matched exclusion patterns)
+            if not final_diff.strip():
+                logger.warning("Compression produced empty diff, falling back to original diff")
+                console.print(
+                    "[yellow]⚠ All files matched exclusion patterns during compression, using original diff[/yellow]"
+                )
+                final_diff = diff_output
+                compression_info["strategy"] = "none"
+                compression_info["compressed_size"] = compression_info["original_size"]
+
+        except git.GitCommandError as e:
+            # Git command failures during compression
+            logger.error(f"Git command failed during compression: {e}", exc_info=True)
+            console.print("[yellow]⚠ Compression failed (git error), using original diff[/yellow]")
+            final_diff = diff_output
+            compression_info = {
+                "strategy": "none",
+                "original_size": len(diff_output.encode("utf-8")),
+                "compressed_size": len(diff_output.encode("utf-8")),
+                "files_included": 0,
+                "files_excluded": 0,
+            }
+        except MemoryError as e:
+            # Memory errors with extremely large diffs
+            logger.error(f"Memory error during compression: {e}", exc_info=True)
+            console.print("[yellow]⚠ Compression failed (memory error), using original diff[/yellow]")
+            final_diff = diff_output
+            compression_info = {
+                "strategy": "none",
+                "original_size": len(diff_output.encode("utf-8")),
+                "compressed_size": len(diff_output.encode("utf-8")),
+                "files_included": 0,
+                "files_excluded": 0,
+            }
+        except Exception as e:
+            # Catch-all for unexpected compression errors
+            logger.error(f"Unexpected error during compression: {e}", exc_info=True)
+            console.print("[yellow]⚠ Compression failed unexpectedly, using original diff[/yellow]")
+            final_diff = diff_output
+            compression_info = {
+                "strategy": "none",
+                "original_size": len(diff_output.encode("utf-8")),
+                "compressed_size": len(diff_output.encode("utf-8")),
+                "files_included": 0,
+                "files_excluded": 0,
+            }
+
+        # Log compression results
         actual_strategy = str(compression_info["strategy"])
+        logger.debug(
+            f"Compression results: strategy={actual_strategy}, "
+            f"original={compression_info['original_size']}, compressed={compression_info['compressed_size']}"
+        )
+
+        # Display enhanced compression results
         if actual_strategy != "none":
             original_kb = int(compression_info["original_size"]) / 1024
             compressed_kb = int(compression_info["compressed_size"]) / 1024
+            if int(compression_info["original_size"]) > 0:
+                reduction_pct = (
+                    1 - int(compression_info["compressed_size"]) / int(compression_info["original_size"])
+                ) * 100
+            else:
+                reduction_pct = 0
+
+            # Enhanced notification with compression ratio and strategy details
+            console.print(f"[green]Compression applied: {actual_strategy}[/green]", end="")
+
+            # Add strategy-specific details
+            if actual_strategy == "smart":
+                files_full = int(compression_info.get("files_included", 0))
+                files_stat = int(compression_info.get("files_excluded", 0))
+                char_limit_kb = int(compression_info.get("token_limit", 100_000)) / 1024
+                console.print(
+                    f" | Priority: {files_full} files (full), {files_stat} files (stat) | "
+                    f"Size: {compressed_kb:.1f} KB / {char_limit_kb:.0f} KB limit"
+                )
+            elif actual_strategy == "filtered":
+                files_inc = int(compression_info.get("files_included", 0))
+                files_exc = int(compression_info.get("files_excluded", 0))
+                console.print(f" | Files: {files_inc} included, {files_exc} excluded | Size: {compressed_kb:.1f} KB")
+            else:
+                console.print(f" | Size: {compressed_kb:.1f} KB")
+
+            console.print(
+                f"[cyan]Reduced by {reduction_pct:.0f}%[/cyan] ({original_kb:.1f} KB → {compressed_kb:.1f} KB)"
+            )
+            console.print(f"Thresholds: {threshold_kb:.0f} KB or {config.diff_files_threshold} files")
+            console.print()
+
             diff_format_note = (
                 f"\n**Diff format:** {actual_strategy} (compressed from {original_kb:.1f} KB to {compressed_kb:.1f} KB)"
             )
+        else:
+            # Compression was skipped or failed - notify user
+            console.print("[yellow]Using original diff (compression not applied)[/yellow]")
+            console.print(f"Thresholds: {threshold_kb:.0f} KB or {config.diff_files_threshold} files")
+            console.print()
+
+        logger.debug(f"Final diff size for prompt: {len(final_diff.encode('utf-8')) / 1024:.1f} KB")
     else:
         logger.debug(f"Diff size within limits: {diff_size['bytes'] / 1024:.1f} KB, {diff_size['files']} files")
 
@@ -1721,7 +1901,32 @@ def commit(ctx: click.Context) -> None:
 {final_diff}
 """
 
+    # Validate prompt size to ensure it's not too large for Claude
+    prompt_size_bytes = len(prompt.encode("utf-8"))
+    prompt_size_kb = prompt_size_bytes / 1024
+    max_prompt_size_kb = 200  # 200KB reasonable limit for Claude prompts
+
+    if prompt_size_kb > max_prompt_size_kb:
+        logger.warning(f"Prompt size ({prompt_size_kb:.1f} KB) exceeds recommended limit ({max_prompt_size_kb} KB)")
+        console.print()
+        console.print(f"[yellow bold]⚠ Large prompt size: {prompt_size_kb:.1f} KB[/yellow bold]")
+        console.print(
+            f"[yellow]The prompt exceeds the recommended {max_prompt_size_kb} KB limit. "
+            "Consider using a more aggressive compression strategy (e.g., 'stat' or 'smart').[/yellow]"
+        )
+        console.print("[dim]Tip: Set ACA_DIFF_COMPRESSION_STRATEGY=stat for maximum compression[/dim]")
+        console.print()
+
+        # If compression was not applied but could have helped, suggest enabling it
+        if not (needs_compression and compression_commit_phase_enabled):
+            console.print("[dim]Tip: Set ACA_DIFF_COMPRESSION_ENABLED=true to enable automatic compression[/dim]")
+            console.print()
+    else:
+        logger.debug(f"Prompt size within limits: {prompt_size_kb:.1f} KB")
+
     # Prepare fallback template for graceful degradation
+    # Note: This template is compression-agnostic and doesn't include diff content,
+    # so it works regardless of whether compression was applied or failed
     fallback_template = get_commit_template(branch_name, ticket_number)
 
     # Generate commit message with retry and fallback support
@@ -1752,7 +1957,14 @@ def commit(ctx: click.Context) -> None:
 
         except (ClaudeNetworkError, ClaudeTimeoutError, ClaudeRateLimitError) as e:
             # Transient errors: offer retry or fallback
-            logger.warning(f"Transient error (attempt {generation_attempt + 1}): {e}")
+            # Include compression context in error logs for diagnostics
+            if compression_info is not None and str(compression_info.get("strategy", "none")) != "none":
+                logger.warning(
+                    f"Transient error (attempt {generation_attempt + 1}): {e} "
+                    f"[compression: {compression_info['strategy']}, size: {int(compression_info['compressed_size']) / 1024:.1f}KB]"
+                )
+            else:
+                logger.warning(f"Transient error (attempt {generation_attempt + 1}): {e}")
             result = handle_generation_error(
                 console,
                 e,
@@ -1771,7 +1983,18 @@ def commit(ctx: click.Context) -> None:
 
         except (ClaudeCLIError, ClaudeContentError) as e:
             # Non-transient errors: offer fallback but no automatic retry
-            logger.error(f"Non-recoverable error: {e}")
+            # Include compression context in error logs for diagnostics
+            if compression_info is not None and str(compression_info.get("strategy", "none")) != "none":
+                logger.error(
+                    f"Non-recoverable error: {e} "
+                    f"[compression: {compression_info['strategy']}, size: {int(compression_info['compressed_size']) / 1024:.1f}KB]"
+                )
+                console.print(
+                    "[dim]Tip: If generation fails consistently with compressed diffs, "
+                    "try ACA_DIFF_COMPRESSION_ENABLED=false[/dim]"
+                )
+            else:
+                logger.error(f"Non-recoverable error: {e}")
             result = handle_generation_error(
                 console,
                 e,
@@ -1788,7 +2011,18 @@ def commit(ctx: click.Context) -> None:
 
         except Exception as e:
             # Unexpected errors: log and offer fallback
-            logger.exception(f"Unexpected error during generation: {e}")
+            # Include compression context in error logs for diagnostics
+            if compression_info is not None and str(compression_info.get("strategy", "none")) != "none":
+                logger.exception(
+                    f"Unexpected error during generation: {e} "
+                    f"[compression: {compression_info['strategy']}, size: {int(compression_info['compressed_size']) / 1024:.1f}KB]"
+                )
+                console.print(
+                    "[dim]Tip: If generation fails consistently with compressed diffs, "
+                    "try ACA_DIFF_COMPRESSION_ENABLED=false[/dim]"
+                )
+            else:
+                logger.exception(f"Unexpected error during generation: {e}")
             result = handle_generation_error(
                 console,
                 e,
