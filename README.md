@@ -17,7 +17,7 @@ Requires Python >= 3.12 and [uv](https://docs.astral.sh/uv/). Scripts are execut
 
 ### aca.py — AI Commit Assistant
 
-Generate commit messages and GitLab MR descriptions using Claude.
+Generate commit messages and GitLab MR descriptions using Claude. Automatically compresses large diffs to prevent prompt size errors (see [Diff Compression](#diff-compression-for-large-commits)).
 
 - `commit` — generate a commit message from staged changes
 - `mr-desc` — generate MR title/description from branch commits, create draft MR via `glab`
@@ -166,3 +166,142 @@ This ensures consistent hook-skipping behavior across both validation phases, pr
 - When hooks are known to pass but you want to skip re-running them
 
 **Warning:** Use sparingly to maintain code quality. Pre-commit hooks help catch issues early.
+
+## Diff Compression for Large Commits
+
+When generating commit messages, `aca.py commit` automatically compresses large diffs that exceed configurable thresholds (default: 50KB or 100+ files). This prevents prompt size errors with the Claude API while still providing meaningful context for accurate commit message generation.
+
+### How It Works
+
+1. **Automatic detection**: When staged changes exceed size or file count thresholds, compression activates automatically
+2. **User notification**: You'll see compression statistics showing original vs. compressed size
+3. **Configurable**: Control compression via config file, environment variables, or CLI flags
+
+### Compression Strategies
+
+| Strategy | Description | Best For |
+|----------|-------------|----------|
+| `stat` | Most aggressive—shows only file names and change counts | Massive refactors (200+ files) |
+| `compact` | Minimal context with 1 line around changes instead of 3 | Balanced size reduction |
+| `filtered` | Excludes generated files, lockfiles, minified JS, binary files | Projects with many dependencies |
+| `function-context` | Shows complete functions/classes where changes occurred | Preserving code review context |
+| `smart` (default) | Intelligent file prioritization—full diff for top 15 important files, stat-only for others | Most use cases |
+
+### Configuration
+
+Add to `~/.config/aca/config.toml`:
+
+```toml
+[aca]
+diff_compression_enabled = true
+diff_compression_strategy = "smart"
+diff_size_threshold_bytes = 50000  # 50KB
+diff_files_threshold = 100
+diff_max_priority_files = 15       # For smart strategy
+diff_token_limit = 100000          # Character limit
+diff_smart_priority_enabled = true
+```
+
+### Environment Variables
+
+Override configuration with environment variables:
+
+| Variable | Description |
+|----------|-------------|
+| `ACA_DIFF_COMPRESSION_ENABLED` | Enable/disable compression (true/false/1/0) |
+| `ACA_DIFF_COMPRESSION_STRATEGY` | Strategy name (stat/compact/filtered/function-context/smart) |
+| `ACA_DIFF_SIZE_THRESHOLD` | Size threshold in bytes |
+| `ACA_DIFF_FILES_THRESHOLD` | File count threshold |
+| `ACA_DIFF_MAX_PRIORITY_FILES` | Max priority files for smart strategy |
+| `ACA_DIFF_TOKEN_LIMIT` | Character limit |
+| `ACA_DIFF_SMART_PRIORITY_ENABLED` | Enable smart prioritization (true/false) |
+
+### Command-Line Flags
+
+```bash
+./aca.py commit --no-compress      # Disable compression for this commit
+./aca.py commit --show-prompt      # Display full prompt before sending
+```
+
+### Example Usage
+
+```bash
+# Use stat strategy for massive refactors
+ACA_DIFF_COMPRESSION_STRATEGY=stat ./aca.py commit
+
+# Increase priority files for more detailed commits
+ACA_DIFF_MAX_PRIORITY_FILES=25 ./aca.py commit
+
+# Debug compression issues
+./aca.py commit --show-prompt --no-compress
+```
+
+### Troubleshooting
+
+| Problem | Solution |
+|---------|----------|
+| Commit message lacks detail | Try `function-context` strategy or increase `diff_max_priority_files` |
+| Still getting prompt too large errors | Use `stat` strategy or reduce `diff_token_limit` |
+| Compression too aggressive | Increase `diff_size_threshold_bytes` or use `--no-compress` |
+| "Argument list too long" error | Enable file-based delivery: `ACA_PROMPT_FILE_ENABLED=true` (see [Large Prompt Handling](#large-prompt-handling)) |
+| Want to test compression settings | Run `./aca.py doctor` to validate config and simulate compression |
+
+### Compression Decision Flow
+
+```mermaid
+flowchart TD
+    A[git diff staged] --> B{Size > 50KB<br/>OR Files > 100?}
+    B -->|No| C[Use full diff]
+    B -->|Yes| D[Apply compression strategy]
+    D --> E{Strategy type}
+    E -->|stat| F[File summary only]
+    E -->|compact| G[Minimal context]
+    E -->|filtered| H[Exclude generated files]
+    E -->|function-context| I[Show full functions]
+    E -->|smart| J[Prioritize important files]
+    F --> K[Generate commit message]
+    G --> K
+    H --> K
+    I --> K
+    J --> K
+    C --> K
+```
+
+### Large Prompt Handling
+
+Even with compression, some diffs may be too large to pass via command-line arguments due to OS limitations (ARG_MAX). `aca.py` automatically handles this using **file-based prompt delivery**.
+
+#### How It Works
+
+1. **Automatic detection**: When the prompt exceeds 50KB (configurable), the diff is written to a temporary file
+2. **Modified prompt**: Claude receives a smaller prompt that references the temp file path
+3. **Automatic cleanup**: The temp file is deleted after generation completes
+
+#### Configuration
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `ACA_PROMPT_FILE_ENABLED` | Enable/disable file-based delivery | `true` |
+| `ACA_PROMPT_FILE_THRESHOLD` | Size threshold in bytes | `50000` (50KB) |
+
+Or in `~/.config/aca/config.toml`:
+
+```toml
+prompt_file_enabled = true
+prompt_file_threshold_bytes = 50000
+```
+
+#### Troubleshooting "Argument list too long" Errors
+
+| Problem | Solution |
+|---------|----------|
+| "Argument list too long" error | Enable file-based delivery: `ACA_PROMPT_FILE_ENABLED=true` |
+| Error persists with file delivery | Use more aggressive compression: `ACA_DIFF_COMPRESSION_STRATEGY=stat` |
+| Temp directory issues | Check permissions: `./aca.py doctor` will test temp directory |
+| Want to lower threshold | Set `ACA_PROMPT_FILE_THRESHOLD=30000` for earlier file-based delivery |
+
+**Note**: File-based delivery requires Claude to read from the temp file. If you encounter issues, check:
+- Temp directory is writable (`./aca.py doctor`)
+- Claude Code CLI has access to the temp directory
+- Sufficient disk space in temp directory
+
