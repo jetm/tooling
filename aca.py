@@ -277,6 +277,8 @@ def slugify_branch_name(title: str, max_length: int = 50) -> str:
 def rename_and_push_branch(repo: git.Repo, old_name: str, new_name: str, console: Console) -> bool:
     """Rename a branch locally and update the remote.
 
+    The new branch is pushed with --set-upstream to ensure proper remote tracking.
+
     Args:
         repo: GitPython Repo object
         old_name: Current branch name
@@ -354,6 +356,93 @@ def rename_and_push_branch(repo: git.Repo, old_name: str, new_name: str, console
         return False
 
     console.print(f"[green]Branch successfully renamed to '{new_name}'[/green]")
+    return True
+
+
+def validate_branch_ready_for_mr(repo: git.Repo, branch_name: str, console: Console) -> bool:
+    """Validate that a branch is ready for MR creation.
+
+    Checks for uncommitted changes and unpushed commits, prompting user to resolve
+    issues before proceeding with MR creation.
+
+    Args:
+        repo: GitPython Repo object
+        branch_name: Name of the branch to validate
+        console: Rich console for output
+
+    Returns:
+        True if validation passes or user resolves issues, False if user aborts
+    """
+    # Check for uncommitted changes (modified tracked files)
+    has_uncommitted = repo.is_dirty(untracked_files=False)
+
+    # Check for staged but uncommitted changes
+    staged_changes = list(repo.index.diff("HEAD"))
+
+    # Check for untracked files
+    untracked_files = repo.untracked_files
+
+    if has_uncommitted or staged_changes or untracked_files:
+        console.print("\n[yellow]You have uncommitted changes. MR should include all changes.[/yellow]")
+        console.print("\n[bold]Status:[/bold]")
+        status_output = repo.git.status("--short")
+        console.print(status_output)
+
+        try:
+            choice = input("\nOptions: (c)ommit first, (a)bort, (i)gnore and continue: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            console.print("\nAborted.")
+            return False
+
+        if choice in ("c", "commit"):
+            console.print(
+                "\n[cyan]Please commit your changes first using 'aca commit' or 'git commit', "
+                "then run 'aca mr-desc' again.[/cyan]"
+            )
+            return False
+        elif choice in ("a", "abort"):
+            console.print("\nAborted.")
+            return False
+        elif choice not in ("i", "ignore"):
+            console.print("[red]Invalid choice. Aborting.[/red]")
+            return False
+        # User chose ignore, continue with validation
+
+    # Check for unpushed commits
+    try:
+        unpushed_count = repo.git.rev_list(f"origin/{branch_name}..{branch_name}", "--count")
+        unpushed_count = int(unpushed_count.strip())
+    except git.exc.GitCommandError:
+        # Remote branch might not exist yet, which is fine
+        unpushed_count = 0
+
+    if unpushed_count > 0:
+        console.print(f"\n[yellow]You have {unpushed_count} unpushed commit(s). MR requires pushed commits.[/yellow]")
+        console.print("\n[bold]Unpushed commits:[/bold]")
+        log_output = repo.git.log(f"origin/{branch_name}..{branch_name}", "--oneline")
+        console.print(log_output)
+
+        try:
+            choice = input("\nOptions: (p)ush now, (a)bort: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            console.print("\nAborted.")
+            return False
+
+        if choice in ("p", "push"):
+            console.print("\nPushing commits to origin...")
+            try:
+                repo.git.push("origin", branch_name)
+                console.print(f"[green]Successfully pushed {unpushed_count} commit(s) to origin[/green]")
+            except git.exc.GitCommandError as e:
+                print_error(console, f"Failed to push: {e}")
+                return False
+        elif choice in ("a", "abort"):
+            console.print("\nAborted.")
+            return False
+        else:
+            console.print("[red]Invalid choice. Aborting.[/red]")
+            return False
+
     return True
 
 
@@ -2749,6 +2838,10 @@ def mr_desc(ctx: click.Context, base: str | None) -> None:
             console.print(
                 "[yellow]Skipping branch rename. Local and remote branch names may differ from MR title.[/yellow]"
             )
+
+    # Validate branch is ready for MR (all changes committed and pushed)
+    if not validate_branch_ready_for_mr(repo, current_branch, console):
+        sys.exit(1)
 
     # Execute glab command (branch has been renamed at this point if user confirmed)
     try:
