@@ -1827,8 +1827,14 @@ def cli(ctx: click.Context, plain_text: bool, verbose: bool) -> None:
     is_flag=True,
     help="Display the full prompt before sending to Claude",
 )
+@click.option(
+    "--yes",
+    "-y",
+    is_flag=True,
+    help="Auto-confirm prompts (skips edit/commit/abort and show-prompt confirmations; error recovery remains interactive)",
+)
 @click.pass_context
-def commit(ctx: click.Context, no_compress: bool, show_prompt: bool) -> None:
+def commit(ctx: click.Context, no_compress: bool, show_prompt: bool, yes: bool) -> None:
     """Generate a commit message for staged changes."""
     plain_text = ctx.obj.get("plain_text", False)
     console = get_console(plain_text)
@@ -2174,21 +2180,23 @@ def commit(ctx: click.Context, no_compress: bool, show_prompt: bool) -> None:
         console.print("[bold]═══════════════════════════════════════════════════════════════════[/bold]")
         console.print()
 
-        try:
-            confirm = input("Send this prompt to Claude? [y/n]: ").strip().lower()
-        except (EOFError, KeyboardInterrupt):
-            # Clean up temp file on abort
-            if prepared_temp_file is not None:
-                cleanup_temp_prompt_file(prepared_temp_file)
-            console.print("\nAborted.")
-            sys.exit(0)
+        # Skip confirmation if --yes flag is provided
+        if not yes:
+            try:
+                confirm = input("Send this prompt to Claude? [y/n]: ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                # Clean up temp file on abort
+                if prepared_temp_file is not None:
+                    cleanup_temp_prompt_file(prepared_temp_file)
+                console.print("\nAborted.")
+                sys.exit(0)
 
-        if confirm not in ("y", "yes"):
-            # Clean up temp file on abort
-            if prepared_temp_file is not None:
-                cleanup_temp_prompt_file(prepared_temp_file)
-            console.print("Aborted.")
-            sys.exit(0)
+            if confirm not in ("y", "yes"):
+                # Clean up temp file on abort
+                if prepared_temp_file is not None:
+                    cleanup_temp_prompt_file(prepared_temp_file)
+                console.print("Aborted.")
+                sys.exit(0)
 
     # Prepare fallback template for graceful degradation
     # Note: This template is compression-agnostic and doesn't include diff content,
@@ -2397,29 +2405,35 @@ def commit(ctx: click.Context, no_compress: bool, show_prompt: bool) -> None:
     assert commit_message is not None
 
     # Display the generated message and prompt for action
-    while True:
+    if yes:
+        # Auto-confirm mode: display message and proceed directly to commit
         console.print("\n[bold]Generated Commit Message:[/bold]\n")
         print_output(console, commit_message, markdown=False)
         console.print()
+    else:
+        while True:
+            console.print("\n[bold]Generated Commit Message:[/bold]\n")
+            print_output(console, commit_message, markdown=False)
+            console.print()
 
-        try:
-            choice = input("Do you want to (e)dit, (c)ommit, or (a)bort? [e/c/a]: ").strip().lower()
-        except (EOFError, KeyboardInterrupt):
-            console.print("\nAborted.")
-            sys.exit(0)
+            try:
+                choice = input("Do you want to (e)dit, (c)ommit, or (a)bort? [e/c/a]: ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                console.print("\nAborted.")
+                sys.exit(0)
 
-        if choice in ("a", "abort"):
-            console.print("Commit cancelled.")
-            sys.exit(0)
-        elif choice in ("e", "edit"):
-            commit_message = edit_in_editor(commit_message, console, ".txt")
-            # Loop back to display the edited message and prompt again
-            continue
-        elif choice in ("c", "commit"):
-            break
-        else:
-            console.print("Invalid choice. Please enter 'e', 'c', or 'a'.")
-            continue
+            if choice in ("a", "abort"):
+                console.print("Commit cancelled.")
+                sys.exit(0)
+            elif choice in ("e", "edit"):
+                commit_message = edit_in_editor(commit_message, console, ".txt")
+                # Loop back to display the edited message and prompt again
+                continue
+            elif choice in ("c", "commit"):
+                break
+            else:
+                console.print("Invalid choice. Please enter 'e', 'c', or 'a'.")
+                continue
 
     # Execute git commit
     # Check if we should skip hooks during commit
