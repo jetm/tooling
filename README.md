@@ -94,6 +94,89 @@ sequenceDiagram
 
 > **Safety Notice**: The tool detects potentially destructive commands (rm, dd, mkfs, chmod, systemctl stop, etc.) and prompts for explicit confirmation before execution.
 
+### weekly_status.py — Jira Weekly Status Automation
+
+Generate weekly status reports from Jira and publish to Confluence automatically.
+
+**Key Features:**
+- Optional week number selection via `--week/-w` option (defaults to current week)
+- Automatic date calculation for specified week (Monday-Friday range)
+- Three query types: completed items, newly created items, open items
+- Duplicate page detection to prevent overwrites
+- HTML table generation with clickable Jira links
+- Confluence page creation under specified parent
+
+```bash
+./weekly_status.py                # create weekly status page (current week)
+./weekly_status.py --week 4       # create status for week 4
+./weekly_status.py -w 52          # create status for week 52
+./weekly_status.py diagnose       # validate configuration
+./weekly_status.py dry-run        # preview without creating
+./weekly_status.py -v             # enable debug logging
+./weekly_status.py -v diagnose    # diagnose with verbose logging
+```
+
+**Setup:**
+
+1. Generate Jira API token at: https://id.atlassian.com/manage-profile/security/api-tokens
+2. Set environment variables:
+   ```bash
+   export JIRA_EMAIL="your-email@linaro.org"
+   export JIRA_TOKEN="your-api-token"
+   ```
+3. Run diagnostics to verify setup:
+   ```bash
+   ./weekly_status.py diagnose
+   ```
+
+**Configuration:**
+
+The script is pre-configured for Linaro's Jira/Confluence instance:
+- Jira URL: https://linaro.atlassian.net
+- Projects: IOTIL, IS
+- Done statuses: Closed, Resolved, Ready For Release
+- Confluence space: ~631a07203e578bb3b500554a
+- Parent page ID: 30666293285
+
+To customize for your organization, edit the constants at the top of `weekly_status.py`.
+
+**Workflow:**
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant Script
+    participant Jira
+    participant Confluence
+
+    User->>Script: ./weekly_status.py [-w WEEK]
+    Script->>Script: Calculate week range (Mon-Fri)
+    Script->>Confluence: Check if page exists
+    alt Page exists
+        Script->>User: Skip (page already exists)
+    else Page doesn't exist
+        Script->>Jira: Query completed items
+        Script->>Jira: Query created items
+        Script->>Jira: Query open items
+        Script->>Script: Build HTML content
+        Script->>Confluence: Create child page
+        Confluence->>Script: Return page URL
+        Script->>User: Display summary + link
+    end
+```
+
+**Requirements:** Python >= 3.14, uv, network access to linaro.atlassian.net
+
+**Troubleshooting:**
+
+| Problem | Solution |
+|---------|----------|
+| Authentication failed | Verify JIRA_EMAIL and JIRA_TOKEN are set correctly |
+| Permission denied | Check Confluence space permissions for your account |
+| Parent page not found | Verify CONFLUENCE_PARENT_PAGE_ID exists |
+| Page already exists | Script skips creation (run with different week) |
+| Network errors | Check connectivity to linaro.atlassian.net |
+
 ### find_related_commits.py
 
 Find commits in a range that touched currently staged files, then optionally fixup + rebase.
