@@ -32,7 +32,7 @@ repos:
     hooks:
       - id: chezmoi-verify
         name: Verify chezmoi configuration
-        entry: chezmoi verify
+        entry: chezmoi --source=. verify
         language: system
         files: \.(tmpl|toml)$|^\.chezmoi
         pass_filenames: false
