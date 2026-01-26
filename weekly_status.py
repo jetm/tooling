@@ -1031,7 +1031,7 @@ def run_diagnostics(console: Console) -> None:
         console.print("  [red]✗[/red] Cannot test - no Jira connection")
         all_passed = False
     else:
-        projects = ", ".join(JIRA_PROJECTS)
+        projects = ", ".join(f'"{p}"' for p in JIRA_PROJECTS)
         test_jql = f"assignee = currentUser() AND project IN ({projects})"
         try:
             jira.enhanced_jql(test_jql, limit=1)
