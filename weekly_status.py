@@ -6,6 +6,7 @@
 #     "python-dateutil",
 #     "click",
 #     "rich",
+#     "requests",
 # ]
 # ///
 """weekly_status.py - Jira Weekly Status Automation Script.
@@ -53,14 +54,19 @@ Configuration
 Environment variables:
     JIRA_EMAIL: Your Jira account email address
     JIRA_TOKEN: Your Jira API token (generate at id.atlassian.com)
+    APPFOX_API_KEY: (Optional) API key for AppFox Compliance classification
 
 Setting Up Environment Variables:
     1. Generate API token at: https://id.atlassian.com/manage-profile/security/api-tokens
     2. Set environment variables:
         export JIRA_EMAIL="your-email@linaro.org"
         export JIRA_TOKEN="your-api-token"
-    3. For persistence, add to ~/.bashrc or ~/.zshrc
-    4. Verify with: ./weekly_status.py diagnose
+    3. (Optional) For automatic page classification, create an AppFox API key:
+       - Go to Confluence: Apps → Compliance → Administration → API Keys
+       - Create key with scope: classification:read, classification:write
+       - export APPFOX_API_KEY="your-appfox-api-key"
+    4. For persistence, add to ~/.bashrc or ~/.zshrc
+    5. Verify with: ./weekly_status.py diagnose
 
     Security: Never commit API tokens to version control. Use environment
     variables or a secrets manager to store credentials securely.
@@ -100,6 +106,10 @@ CONFLUENCE_SPACE_KEY = "~631a07203e578bb3b500554a"
 CONFLUENCE_PARENT_PAGE_ID = "30666293285"
 ATLASSIAN_CLOUD_ID = "f413e5f8-3a52-4d3e-9228-50ba90fdd427"
 
+# AppFox Compliance API Configuration
+# https://docs.appfox.io/confluence-compliance/rest-api
+APPFOX_API_URL = "https://ac-cloud.com/compliance/api/v1"
+
 # Jira Query Configuration
 JIRA_PROJECTS = ["IOTIL", "IS"]
 JIRA_DONE_STATUSES = ["Closed", "Resolved", "Ready For Release"]
@@ -127,6 +137,23 @@ def load_credentials() -> tuple[str | None, str | None]:
     email = os.environ.get("JIRA_EMAIL")
     token = os.environ.get("JIRA_TOKEN")
     return (email, token)
+
+
+def load_appfox_api_key() -> str | None:
+    """Load AppFox Compliance API key from environment variable.
+
+    Reads APPFOX_API_KEY from the environment. This key is optional and
+    used for automatic page classification via the AppFox Compliance app.
+
+    Returns:
+        The API key string, or None if not set.
+
+    Example:
+        >>> api_key = load_appfox_api_key()
+        >>> if api_key:
+        ...     print("AppFox classification enabled")
+    """
+    return os.environ.get("APPFOX_API_KEY")
 
 
 # =============================================================================
@@ -562,7 +589,163 @@ def check_page_exists(title: str) -> bool:
         return False
 
 
-def create_child_page(title: str, content: str) -> str:
+def get_public_classification_id() -> str | None:
+    """Get the classification level ID for 'Public' classification.
+
+    Queries the AppFox Compliance API for available classification levels
+    and returns the UUID for the 'Public' level.
+
+    Returns:
+        The classification level UUID string, or None if not found or API unavailable.
+    """
+    import requests
+
+    api_key = load_appfox_api_key()
+    if not api_key:
+        logger.debug("No APPFOX_API_KEY set, skipping classification")
+        return None
+
+    try:
+        response = requests.get(
+            f"{APPFOX_API_URL}/level",
+            headers={"x-api-key": api_key},
+            params={"status": "published"},
+            timeout=30,
+        )
+        response.raise_for_status()
+        data = response.json()
+
+        # AppFox API returns list directly for /level endpoint
+        levels = data if isinstance(data, list) else data.get("data", [])
+        logger.debug(f"AppFox classification levels: {[lvl.get('name') for lvl in levels]}")
+
+        for level in levels:
+            if level.get("name", "").lower() == "public":
+                level_id = level.get("id")
+                logger.debug(f"Found 'Public' classification level with ID: {level_id}")
+                return level_id
+
+        logger.warning("No 'Public' classification level found in AppFox")
+        return None
+    except requests.exceptions.HTTPError as e:
+        if e.response.status_code == 401:
+            logger.warning("AppFox API authentication failed - check APPFOX_API_KEY")
+        elif e.response.status_code == 403:
+            logger.warning("AppFox API access denied - check API key scopes (needs classification:read)")
+        else:
+            logger.warning(f"AppFox API error: {e}")
+        return None
+    except Exception as e:
+        logger.warning(f"Failed to get classification levels from AppFox: {e}")
+        return None
+
+
+def set_page_classification(page_id: str, classification_id: str) -> bool:
+    """Set the classification level on a Confluence page.
+
+    Uses the AppFox Compliance API to apply a classification level to a page.
+
+    Args:
+        page_id: The ID of the page to classify.
+        classification_id: The classification level UUID to apply.
+
+    Returns:
+        True if classification was set successfully, False otherwise.
+    """
+    import requests
+
+    api_key = load_appfox_api_key()
+    if not api_key:
+        logger.warning("No APPFOX_API_KEY set, cannot set classification")
+        return False
+
+    try:
+        response = requests.post(
+            f"{APPFOX_API_URL}/page-level",
+            headers={"x-api-key": api_key, "Content-Type": "application/json"},
+            json={"pageId": page_id, "levelId": classification_id},
+            timeout=30,
+        )
+        response.raise_for_status()
+        logger.debug(f"Set classification on page {page_id} via AppFox API")
+        return True
+    except requests.exceptions.HTTPError as e:
+        if e.response.status_code == 401:
+            logger.warning("AppFox API authentication failed - check APPFOX_API_KEY")
+        elif e.response.status_code == 403:
+            logger.warning("AppFox API access denied - check API key scopes (needs classification:write)")
+        else:
+            logger.warning(f"AppFox API error setting classification: {e}")
+        return False
+    except Exception as e:
+        logger.warning(f"Failed to set page classification via AppFox: {e}")
+        return False
+
+
+def check_classification_api_enabled() -> tuple[bool, list[str], str | None]:
+    """Check if the AppFox Compliance API is configured and accessible.
+
+    Verifies APPFOX_API_KEY is set and queries the API for available
+    classification levels.
+
+    Returns:
+        A tuple of (enabled, level_names, error_message):
+        - enabled: True if API is configured and returns classification levels
+        - level_names: List of available classification level names
+        - error_message: Error description if API unavailable, None otherwise
+    """
+    import requests
+
+    api_key = load_appfox_api_key()
+    if not api_key:
+        return (False, [], "APPFOX_API_KEY environment variable not set")
+
+    try:
+        response = requests.get(
+            f"{APPFOX_API_URL}/level",
+            headers={"x-api-key": api_key},
+            params={"status": "published"},
+            timeout=30,
+        )
+        response.raise_for_status()
+        data = response.json()
+
+        # AppFox API returns list directly for /level endpoint
+        levels = data if isinstance(data, list) else data.get("data", [])
+        level_names = [lvl.get("name", "unknown") for lvl in levels]
+
+        if levels:
+            return (True, level_names, None)
+        else:
+            return (False, [], "No classification levels configured (API returned empty list)")
+    except requests.exceptions.HTTPError as e:
+        if e.response.status_code == 401:
+            return (False, [], "Authentication failed - check APPFOX_API_KEY")
+        elif e.response.status_code == 403:
+            return (False, [], f"Access denied - check API key scopes: {e.response.text}")
+        else:
+            return (False, [], str(e))
+    except Exception as e:
+        return (False, [], str(e))
+
+
+class PageCreationResult:
+    """Result of creating a Confluence page."""
+
+    def __init__(self, url: str, classification_status: str, classification_message: str | None = None):
+        """Initialize page creation result.
+
+        Args:
+            url: The URL of the created page.
+            classification_status: One of 'success', 'skipped', 'failed'.
+            classification_message: Optional message describing classification outcome.
+        """
+        self.url = url
+        self.classification_status = classification_status
+        self.classification_message = classification_message
+
+
+def create_child_page(title: str, content: str) -> PageCreationResult:
     """Create a Confluence child page under the configured parent.
 
     Creates a new page with the specified title and HTML content
@@ -571,7 +754,9 @@ def create_child_page(title: str, content: str) -> str:
 
     Pages are created with the v2 editor format to ensure compatibility
     with current Confluence standards and avoid legacy editor deprecation
-    warnings.
+    warnings. Pages are automatically marked as 'public' through both:
+    - Adding the 'public' label for categorization
+    - Setting the 'Public' classification level via AppFox Compliance API
 
     The content should be in Confluence storage format (XHTML-like).
     Common HTML tags are supported, but some may need to be converted
@@ -582,7 +767,7 @@ def create_child_page(title: str, content: str) -> str:
         content: The HTML content for the page body in storage format.
 
     Returns:
-        The URL of the newly created page.
+        PageCreationResult with URL and classification status ('success', 'skipped', or 'failed').
 
     Raises:
         ValueError: If credentials are missing or page already exists.
@@ -616,17 +801,49 @@ def create_child_page(title: str, content: str) -> str:
             full_width=True,
         )
 
+        # Extract page ID for label addition
+        page_id = result.get("id")
+
+        # Add 'public' label to classify the page
+        try:
+            confluence.set_page_label(page_id, "public")
+            logger.debug(f"Added 'public' label to page {page_id}")
+        except Exception as e:
+            logger.warning(f"Failed to add 'public' label to page {page_id}: {e}")
+
+        # Set classification level (AppFox Compliance API)
+        classification_status = "skipped"
+        classification_message = None
+        try:
+            classification_id = get_public_classification_id()
+            if classification_id:
+                if set_page_classification(page_id, classification_id):
+                    logger.debug(f"Set 'Public' classification on page {page_id}")
+                    classification_status = "success"
+                    classification_message = "Page classified as 'Public'"
+                else:
+                    logger.warning(f"Could not set classification on page {page_id}")
+                    classification_status = "failed"
+                    classification_message = "Failed to set classification level"
+            else:
+                logger.warning("Skipping classification - no 'Public' level available")
+                classification_status = "skipped"
+                classification_message = "Classification not configured (set APPFOX_API_KEY)"
+        except Exception as e:
+            logger.warning(f"Failed to classify page {page_id}: {e}")
+            classification_status = "failed"
+            classification_message = f"Classification error: {e}"
+
         # Extract page URL from result
         webui_path = result.get("_links", {}).get("webui")
         if webui_path:
             page_url = f"{CONFLUENCE_BASE_URL}{webui_path}"
         else:
-            # Fallback: construct URL from page ID
-            page_id = result.get("id")
+            # Fallback: construct URL from page ID (already extracted above)
             page_url = f"{CONFLUENCE_BASE_URL}/pages/{page_id}"
 
         logger.debug(f"Successfully created page: {page_url}")
-        return page_url
+        return PageCreationResult(page_url, classification_status, classification_message)
 
     except ApiError as e:
         error_msg = str(e)
@@ -1020,6 +1237,34 @@ def run_diagnostics(console: Console) -> None:
     console.print()
 
     # ==========================================================================
+    # Check 8: AppFox Classification API
+    # ==========================================================================
+    console.print("[bold]8. AppFox Classification API[/bold]")
+    appfox_key = load_appfox_api_key()
+    if not appfox_key:
+        console.print("  [yellow]![/yellow] APPFOX_API_KEY not set (optional)")
+        console.print("    [dim]Pages will show 'Pending Classification' until manually set[/dim]")
+        console.print("    [dim]To enable: Apps → Compliance → Administration → API Keys[/dim]")
+        console.print('    [dim]Then: export APPFOX_API_KEY="your-api-key"[/dim]')
+    else:
+        console.print(f"  [green]✓[/green] APPFOX_API_KEY is set: {'*' * 8}...")
+        enabled, level_names, error_msg = check_classification_api_enabled()
+        if enabled:
+            console.print("  [green]✓[/green] AppFox API connection successful")
+            console.print(f"    [dim]Available levels: {', '.join(level_names)}[/dim]")
+            if "public" in [name.lower() for name in level_names]:
+                console.print("    [dim]'Public' level available for auto-classification[/dim]")
+            else:
+                console.print("    [yellow]![/yellow] No 'Public' level found - pages won't be auto-classified")
+        else:
+            console.print("  [yellow]![/yellow] AppFox API connection failed")
+            console.print(f"    [dim]{error_msg}[/dim]")
+            console.print("    [dim]Check API key and scopes (needs classification:read, classification:write)[/dim]")
+    # Note: Classification is optional, so this doesn't fail the diagnostic
+
+    console.print()
+
+    # ==========================================================================
     # Summary
     # ==========================================================================
     if all_passed:
@@ -1188,11 +1433,19 @@ def run_normal_mode(console: Console, week: int | None = None) -> None:
     # ==========================================================================
     try:
         console.print("Creating Confluence page...")
-        page_url = create_child_page(title, content)
+        result = create_child_page(title, content)
 
         console.print()
         console.print("[green]✓[/green] Page created successfully!")
-        console.print(f"[bold]URL:[/bold] {page_url}")
+        console.print(f"[bold]URL:[/bold] {result.url}")
+
+        # Display classification status
+        if result.classification_status == "success":
+            console.print("[green]✓[/green] Page classified as 'Public'")
+        elif result.classification_status == "skipped":
+            console.print(f"[yellow]![/yellow] Classification skipped: {result.classification_message}")
+        else:  # failed
+            console.print(f"[yellow]![/yellow] Classification failed: {result.classification_message}")
 
     except ValueError as e:
         console.print(f"[red]Error:[/red] {e}")
