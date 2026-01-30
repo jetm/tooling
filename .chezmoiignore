@@ -11,7 +11,10 @@ __pycache__
 *.log
 logs/
 specs/
+pyproject.toml
 
 # Python scripts (these are the targets, not chezmoi sources)
 *.py
 git-undo.sh
+
+uv.lock
