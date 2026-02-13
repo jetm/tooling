@@ -5,8 +5,7 @@ ccnt=$(git rev-list --count HEAD)
 if [ "$ccnt" -eq 1 ]; then cstr="commit"; fi
 parm3=""
 
-function _undo()
-{
+function _undo() {
   type=${1:-soft}
   undo_cnt=${2:-1}
   reset=${3:-""}
@@ -25,7 +24,7 @@ function _undo()
 
 case "$1" in
   -h)
-    cat << EOL
+    cat <<EOL
 This will erase any changes since your last commit.
 If you want to get help info, run "git undo --help" instead.
 Do you want to continue? [yN]"
@@ -36,7 +35,7 @@ EOL
         parm1=hard
         parm2=${2:-1}
         ;;
-      * )
+      *)
         exit 0
         ;;
     esac
@@ -45,7 +44,7 @@ EOL
     parm1=hard
     parm2=${2:-1}
     ;;
-  -s|--soft)
+  -s | --soft)
     parm1=soft
     parm2=${2:-1}
     parm3=reset
@@ -65,8 +64,8 @@ EOL
 esac
 
 if [[ ! $parm2 =~ ^[1-9][0-9]*$ ]]; then
-    echo "Invalid undo count: $parm2"
-    exit 1
+  echo "Invalid undo count: $parm2"
+  exit 1
 fi
 
 _undo "$parm1" "$parm2" "$parm3"
