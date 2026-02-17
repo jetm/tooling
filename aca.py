@@ -74,6 +74,7 @@ import click
 import git
 import tomli
 from rich.console import Console
+from rich.markup import escape as rich_escape
 
 from common_utils import (
     RETRYABLE_EXCEPTIONS,
@@ -712,9 +713,9 @@ def run_precommit_hooks(repo: git.Repo, console: Console, staged_files: list[str
     # Display hook output on failure
     console.print("\n[red bold]Pre-commit hooks failed:[/red bold]\n")
     if result.stdout:
-        console.print(result.stdout)
+        console.print(rich_escape(result.stdout))
     if result.stderr:
-        console.print(f"[red]{result.stderr}[/red]")
+        console.print(f"[red]{rich_escape(result.stderr)}[/red]")
 
     return False, modified_files
 
