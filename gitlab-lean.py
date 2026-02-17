@@ -26,6 +26,7 @@ import logging
 import os
 import re
 import sys
+import time
 import tomllib
 from datetime import UTC, datetime
 from pathlib import Path
@@ -137,7 +138,7 @@ def cli(ctx: click.Context, token: str | None) -> None:
 @click.argument("mr_url")
 @click.pass_context
 def merge_command(ctx: click.Context, mr_url: str) -> None:
-    """Approve and merge an MR, temporarily disabling author-approval restriction.
+    """Approve and merge an MR, temporarily removing branch protection and author-approval restriction.
 
     MR_URL is the GitLab merge request URL
     (e.g., https://gitlab.com/group/project/-/merge_requests/123).
@@ -159,12 +160,28 @@ def merge_command(ctx: click.Context, mr_url: str) -> None:
         mr = project.mergerequests.get(mr_iid)
         logger.info(f"Merge Request: !{mr_iid} - {mr.title}")
 
+        # Check if target branch is protected
+        was_protected = False
+        target_branch = mr.target_branch
+        try:
+            protected_branch = project.protectedbranches.get(target_branch)
+            was_protected = True
+            logger.info(f"Target branch '{target_branch}' is protected")
+        except GitlabGetError:
+            logger.info(f"Target branch '{target_branch}' is not protected, skipping unprotect")
+
         # Save current approval setting
         approvals = project.approvals.get()
         original_setting = approvals.merge_requests_author_approval
         logger.info(f"Current merge_requests_author_approval: {original_setting}")
 
         try:
+            # Remove branch protection if present
+            if was_protected:
+                console.print(f"[bold yellow]Removing protection from '{target_branch}'...[/bold yellow]")
+                protected_branch.delete()
+                logger.info(f"Branch '{target_branch}' unprotected")
+
             # Disable "Prevent approval by MR creator"
             console.print("[bold yellow]Disabling author-approval restriction...[/bold yellow]")
             gl.http_post(
@@ -184,15 +201,52 @@ def merge_command(ctx: click.Context, mr_url: str) -> None:
 
             # Approve the MR
             console.print("[bold blue]Approving MR...[/bold blue]")
-            mr.approve()
-            logger.info("MR approved")
+            try:
+                gl.http_post(f"/projects/{project.id}/merge_requests/{mr_iid}/approve")
+                logger.info("MR approved")
+            except GitlabAuthenticationError:
+                logger.info("MR already approved (or author-approval blocked), continuing")
+
+            # Rebase before merge (required for fast-forward merge strategy)
+            console.print("[bold yellow]Rebasing MR...[/bold yellow]")
+            gl.http_put(f"/projects/{project.id}/merge_requests/{mr_iid}/rebase")
+            for _ in range(60):
+                time.sleep(2)
+                mr_data = gl.http_get(
+                    f"/projects/{project.id}/merge_requests/{mr_iid}",
+                    query_data={"include_rebase_in_progress": True},
+                )
+                if not mr_data.get("rebase_in_progress", False):
+                    break
+            else:
+                raise click.ClickException("Rebase timed out after 120s")
+            if mr_data.get("merge_error"):
+                raise click.ClickException(f"Rebase failed: {mr_data['merge_error']}")
+            logger.info("MR rebased")
 
             # Merge the MR
             console.print("[bold blue]Merging MR...[/bold blue]")
-            mr.merge(should_remove_source_branch=True)
+            gl.http_put(
+                f"/projects/{project.id}/merge_requests/{mr_iid}/merge",
+                post_data={"should_remove_source_branch": True},
+            )
             logger.info("MR merged (source branch deleted)")
 
         finally:
+            # Restore branch protection if it was removed
+            if was_protected:
+                console.print(f"[bold yellow]Restoring protection on '{target_branch}'...[/bold yellow]")
+                project.protectedbranches.create(
+                    {
+                        "name": target_branch,
+                        "push_access_level": 0,
+                        "merge_access_level": 30,
+                        "allow_force_push": False,
+                        "code_owner_approval_required": False,
+                    }
+                )
+                logger.info(f"Branch '{target_branch}' re-protected")
+
             # Re-enable "Prevent approval by MR creator"
             console.print("[bold yellow]Restoring author-approval restriction...[/bold yellow]")
             gl.http_post(
