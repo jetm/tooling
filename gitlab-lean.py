@@ -160,6 +160,9 @@ def merge_command(ctx: click.Context, mr_url: str) -> None:
         mr = project.mergerequests.get(mr_iid)
         logger.info(f"Merge Request: !{mr_iid} - {mr.title}")
 
+        if mr.state != "opened":
+            raise click.ClickException(f"MR is '{mr.state}', not open — nothing to do.")
+
         # Check if target branch is protected
         was_protected = False
         target_branch = mr.target_branch
@@ -224,16 +227,16 @@ def merge_command(ctx: click.Context, mr_url: str) -> None:
                 raise click.ClickException(f"Rebase failed: {mr_data['merge_error']}")
             logger.info("MR rebased")
 
-            # Merge the MR
-            console.print("[bold blue]Merging MR...[/bold blue]")
-            gl.http_put(
-                f"/projects/{project.id}/merge_requests/{mr_iid}/merge",
-                post_data={"should_remove_source_branch": True},
-            )
-            logger.info("MR merged (source branch deleted)")
+            # Re-approve after rebase (rebase resets approvals if "reset on push" is enabled)
+            console.print("[bold blue]Re-approving MR after rebase...[/bold blue]")
+            try:
+                gl.http_post(f"/projects/{project.id}/merge_requests/{mr_iid}/approve")
+                logger.info("MR re-approved")
+            except GitlabAuthenticationError:
+                logger.info("MR already approved, continuing")
 
-        finally:
-            # Restore branch protection if it was removed
+            # Restore branch protection BEFORE merge so the pipeline sees a protected branch
+            # (CI rules like $CI_COMMIT_REF_PROTECTED depend on protection status at pipeline start)
             if was_protected:
                 console.print(f"[bold yellow]Restoring protection on '{target_branch}'...[/bold yellow]")
                 project.protectedbranches.create(
@@ -246,7 +249,64 @@ def merge_command(ctx: click.Context, mr_url: str) -> None:
                     }
                 )
                 logger.info(f"Branch '{target_branch}' re-protected")
+                console.print(
+                    f"[bold green]Protection restored on '{target_branch}' in {project_path}[/bold green]\n"
+                    f"[dim]push=none, merge=dev+maintainer, force_push=off, code_owner=off[/dim]"
+                )
 
+            # Wait for MR merge status to be computed after rebase
+            console.print("[bold yellow]Waiting for merge status check...[/bold yellow]")
+            for attempt in range(30):
+                mr_data = gl.http_get(f"/projects/{project.id}/merge_requests/{mr_iid}")
+                merge_status = mr_data.get("detailed_merge_status", "unknown")
+                if merge_status not in ("checking", "approvals_syncing"):
+                    logger.info(f"Merge status: {merge_status}")
+                    break
+                if attempt > 0 and attempt % 5 == 0:
+                    logger.info(f"Still waiting for merge status (currently: {merge_status}, {attempt * 2}s)...")
+                time.sleep(2)
+            else:
+                raise click.ClickException("Merge status check timed out after 60s")
+
+            # Merge the MR (use merge_when_pipeline_succeeds if immediate merge fails)
+            console.print("[bold blue]Merging MR...[/bold blue]")
+            try:
+                gl.http_put(
+                    f"/projects/{project.id}/merge_requests/{mr_iid}/merge",
+                    post_data={"should_remove_source_branch": True},
+                )
+                logger.info("MR merged (source branch deleted)")
+            except Exception as merge_err:
+                err_str = str(merge_err)
+                if "405" in err_str or "422" in err_str:
+                    console.print(
+                        "[bold yellow]Immediate merge not possible (pipeline pending),"
+                        " setting to merge when pipeline succeeds...[/bold yellow]"
+                    )
+                    # Retry MWPS on transient 422 errors
+                    last_err = None
+                    for mwps_attempt in range(3):
+                        try:
+                            gl.http_put(
+                                f"/projects/{project.id}/merge_requests/{mr_iid}/merge",
+                                post_data={"should_remove_source_branch": True, "merge_when_pipeline_succeeds": True},
+                            )
+                            logger.info("MR set to merge when pipeline succeeds")
+                            last_err = None
+                            break
+                        except Exception as mwps_err:
+                            last_err = mwps_err
+                            if "422" in str(mwps_err) and mwps_attempt < 2:
+                                logger.info(f"MWPS attempt {mwps_attempt + 1} failed (422), retrying in 3s...")
+                                time.sleep(3)
+                            else:
+                                raise
+                    if last_err:
+                        raise last_err from None
+                else:
+                    raise
+
+        finally:
             # Re-enable "Prevent approval by MR creator"
             console.print("[bold yellow]Restoring author-approval restriction...[/bold yellow]")
             gl.http_post(
@@ -254,6 +314,27 @@ def merge_command(ctx: click.Context, mr_url: str) -> None:
                 post_data={"merge_requests_author_approval": original_setting},
             )
             logger.info(f"Restored merge_requests_author_approval to {original_setting}")
+
+            # Ensure branch protection is restored even if we failed before the merge step
+            if was_protected:
+                try:
+                    project.protectedbranches.get(target_branch)
+                except GitlabGetError:
+                    console.print(f"[bold yellow]Restoring protection on '{target_branch}' (cleanup)...[/bold yellow]")
+                    project.protectedbranches.create(
+                        {
+                            "name": target_branch,
+                            "push_access_level": 0,
+                            "merge_access_level": 30,
+                            "allow_force_push": False,
+                            "code_owner_approval_required": False,
+                        }
+                    )
+                    logger.info(f"Branch '{target_branch}' re-protected (cleanup)")
+                    console.print(
+                        f"[bold green]Protection restored on '{target_branch}' in {project_path}[/bold green]\n"
+                        f"[dim]push=none, merge=dev+maintainer, force_push=off, code_owner=off[/dim]"
+                    )
 
         console.print(f"[bold green]Successfully merged !{mr_iid} - {mr.title}[/bold green]")
 
