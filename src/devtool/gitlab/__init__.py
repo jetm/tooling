@@ -1,10 +1,16 @@
 """devtool gitlab — shared GitLab client utilities."""
 
+from __future__ import annotations
+
 import logging
 import os
 import re
+from typing import TYPE_CHECKING
 
 import click
+
+if TYPE_CHECKING:
+    import gitlab
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +52,7 @@ def get_gitlab_token(cli_token: str | None = None) -> str:
     )
 
 
-def connect_gitlab(token: str):
+def connect_gitlab(token: str) -> gitlab.Gitlab:
     """Authenticate and return a connected Gitlab instance."""
     from devtool._deps import require
 

@@ -63,13 +63,16 @@ def check_dependency(executable: str, console: Console) -> bool:
     return True
 
 
-def check_claude_cli(console: Console) -> bool:
-    """Check if Claude Code CLI is installed and working."""
+def check_claude_cli(console: Console) -> str | None:
+    """Check if Claude Code CLI is installed and working.
+
+    Returns the version string on success, None on failure.
+    """
     if shutil.which("claude") is None:
         console.print(
             "[red]Error: Claude Code CLI not found.[/red]\n[yellow]Install it from https://claude.ai/download[/yellow]"
         )
-        return False
+        return None
 
     try:
         result = subprocess.run(
@@ -83,18 +86,18 @@ def check_claude_cli(console: Console) -> bool:
                 "[red]Error: Claude Code CLI failed to execute.[/red]\n"
                 "[yellow]Try reinstalling from https://claude.ai/download[/yellow]"
             )
-            return False
+            return None
     except subprocess.TimeoutExpired:
         console.print(
             "[red]Error: Claude Code CLI timed out.[/red]\n"
             "[yellow]The CLI may be hanging. Try running 'claude --version' manually.[/yellow]"
         )
-        return False
+        return None
     except FileNotFoundError:
         console.print(
             "[red]Error: Claude Code CLI not found.[/red]\n[yellow]Install it from https://claude.ai/download[/yellow]"
         )
-        return False
+        return None
 
     has_api_key = os.environ.get("ANTHROPIC_API_KEY") is not None
     credentials_file = Path.home() / ".claude" / ".credentials.json"
@@ -106,111 +109,36 @@ def check_claude_cli(console: Console) -> bool:
             "[yellow]Run 'claude' and sign in to authenticate, "
             "or set the ANTHROPIC_API_KEY environment variable.[/yellow]"
         )
-        return False
+        return None
 
-    return True
+    # Extract version string from output
+    version_match = re.search(r"(\d+\.\d+\.\d+)", result.stdout.strip())
+    return version_match.group(1) if version_match else ""
 
 
-def check_version_compatibility(console: Console) -> None:
-    """Check and warn about CLI version compatibility."""
-    cli_version = None
+def check_version_compatibility(console: Console, version: str | None = None) -> None:
+    """Check and warn about CLI version compatibility.
 
-    try:
-        result = subprocess.run(
-            ["claude", "--version"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        if result.returncode == 0:
-            version_output = result.stdout.strip()
-            version_match = re.search(r"(\d+\.\d+\.\d+)", version_output)
-            if version_match:
-                cli_version = version_match.group(1)
-    except Exception:
-        pass
+    If version is provided, uses it directly instead of re-running claude --version.
+    """
+    if version is None:
+        # Fallback: run claude --version if no cached version provided
+        try:
+            result = subprocess.run(
+                ["claude", "--version"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if result.returncode == 0:
+                version_match = re.search(r"(\d+\.\d+\.\d+)", result.stdout.strip())
+                if version_match:
+                    version = version_match.group(1)
+        except Exception:
+            pass
 
-    if not cli_version:
+    if not version:
         console.print(
             "[yellow]Warning: Could not determine Claude Code CLI version. "
             "Ensure you have the latest version installed.[/yellow]"
         )
-
-
-def get_precommit_skip_env() -> dict[str, str]:
-    """Return environment overrides to skip all pre-commit hooks.
-
-    Uses SKIP_PRECOMMIT as a single toggle. When set to a truthy value, this
-    reads .pre-commit-config.yaml to build a comma-separated SKIP list.
-    """
-
-    def is_truthy_env(value: str | None) -> bool:
-        if value is None:
-            return False
-        normalized = value.strip().lower()
-        if not normalized:
-            return False
-        return normalized not in {"0", "false", "no", "off", "n"}
-
-    if not is_truthy_env(os.environ.get("SKIP_PRECOMMIT")):
-        return {}
-
-    fallback_hook_ids = [
-        "ruff-format",
-        "ruff",
-        "shfmt",
-        "shellcheck",
-        "chezmoi-verify",
-        "validate-python-version",
-    ]
-
-    def find_repo_root() -> Path | None:
-        try:
-            result = subprocess.run(
-                ["git", "rev-parse", "--show-toplevel"],
-                capture_output=True,
-                text=True,
-                timeout=3,
-            )
-            if result.returncode == 0:
-                root = result.stdout.strip()
-                if root:
-                    return Path(root)
-        except Exception:
-            pass
-
-        cwd = Path.cwd()
-        for parent in (cwd, *cwd.parents):
-            if (parent / ".pre-commit-config.yaml").exists():
-                return parent
-        return None
-
-    def parse_hook_ids(config_text: str) -> list[str]:
-        hook_ids: list[str] = []
-        seen: set[str] = set()
-        for line in config_text.splitlines():
-            match = re.match(r"^\s*-\s*id:\s*([^\s#]+)", line)
-            if not match:
-                continue
-            hook_id = match.group(1).strip().strip("\"'")
-            if hook_id and hook_id not in seen:
-                seen.add(hook_id)
-                hook_ids.append(hook_id)
-        return hook_ids
-
-    repo_root = find_repo_root()
-    if not repo_root:
-        return {"SKIP": ",".join(fallback_hook_ids)}
-
-    config_path = repo_root / ".pre-commit-config.yaml"
-    try:
-        with open(config_path, encoding="utf-8") as f:
-            config_text = f.read()
-        hook_ids = parse_hook_ids(config_text)
-    except Exception:
-        hook_ids = []
-
-    if not hook_ids:
-        hook_ids = fallback_hook_ids
-
-    return {"SKIP": ",".join(hook_ids)}

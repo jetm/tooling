@@ -1,12 +1,18 @@
 """devtool mr-desc — AI-powered merge request description generation."""
 
+from __future__ import annotations
+
 import logging
 import re
 import subprocess
 import sys
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import click
+
+if TYPE_CHECKING:
+    import git
+    from rich.console import Console
 
 logger = logging.getLogger(__name__)
 
@@ -87,7 +93,7 @@ def slugify_branch_name(title: str, max_length: int = 50) -> str:
     return slug
 
 
-def rename_and_push_branch(repo: object, old_name: str, new_name: str, console: object) -> bool:
+def rename_and_push_branch(repo: git.Repo, old_name: str, new_name: str, console: Console) -> bool:
     """Rename a branch locally and update the remote."""
     import git
 
@@ -156,7 +162,7 @@ def rename_and_push_branch(repo: object, old_name: str, new_name: str, console: 
     return True
 
 
-def validate_branch_ready_for_mr(repo: object, branch_name: str, console: object) -> bool:
+def validate_branch_ready_for_mr(repo: git.Repo, branch_name: str, console: Console) -> bool:
     """Validate that a branch is ready for MR creation."""
     import git
 
@@ -346,7 +352,6 @@ def mr_desc(ctx: click.Context, base: str | None, plain_text: bool, verbose: boo
     """Generate a merge request description."""
     import git
 
-    from devtool.common.claude import generate_with_progress
     from devtool.common.console import (
         check_claude_cli,
         check_dependency,
@@ -356,20 +361,11 @@ def mr_desc(ctx: click.Context, base: str | None, plain_text: bool, verbose: boo
         print_output,
         setup_logging,
     )
-    from devtool.common.errors import (
-        ClaudeAuthenticationError,
-        ClaudeCLIError,
-        ClaudeContentError,
-        ClaudeNetworkError,
-        ClaudeRateLimitError,
-        ClaudeTimeoutError,
-    )
     from devtool.common.git import (
         PREAMBLE_PATTERNS,
         edit_in_editor,
         extract_ticket_number,
         get_target_branch_from_config,
-        handle_generation_error,
         strip_markdown_code_blocks,
     )
 
@@ -380,9 +376,10 @@ def mr_desc(ctx: click.Context, base: str | None, plain_text: bool, verbose: boo
         sys.exit(1)
     if not check_dependency("glab", console):
         sys.exit(1)
-    if not check_claude_cli(console):
+    cli_version = check_claude_cli(console)
+    if cli_version is None:
         sys.exit(1)
-    check_version_compatibility(console)
+    check_version_compatibility(console, version=cli_version)
 
     try:
         repo = git.Repo(search_parent_directories=True)
@@ -496,71 +493,16 @@ def mr_desc(ctx: click.Context, base: str | None, plain_text: bool, verbose: boo
 
     fallback_template = get_mr_template(current_branch, target_branch, ticket_number or "")
 
-    # Generate MR description with retry and fallback support
-    mr_content: str | None = None
-    max_generation_attempts = 3
+    from devtool.common.claude import generate_with_retry
 
-    for generation_attempt in range(max_generation_attempts):
-        try:
-            mr_content = generate_with_progress(
-                console,
-                prompt,
-                str(repo.working_dir),
-                message="Generating merge request description...",
-                section_marker="## Commits",
-            )
-            break
-
-        except ClaudeAuthenticationError as e:
-            logger.error(f"Authentication error: {e}")
-            if console.no_color:
-                console.print(e.format_error())
-            else:
-                console.print(f"[red]{e.format_error()}[/red]")
-            sys.exit(1)
-
-        except (ClaudeNetworkError, ClaudeTimeoutError, ClaudeRateLimitError) as e:
-            logger.warning(f"Transient error (attempt {generation_attempt + 1}): {e}")
-            result = handle_generation_error(
-                console,
-                e,
-                fallback_content=fallback_template,
-                operation="MR description generation",
-            )
-            if result is not None:
-                mr_content = edit_in_editor(result, console, ".md")
-                break
-
-        except (ClaudeCLIError, ClaudeContentError) as e:
-            logger.error(f"Non-recoverable error: {e}")
-            result = handle_generation_error(
-                console,
-                e,
-                fallback_content=fallback_template,
-                operation="MR description generation",
-            )
-            if result is not None:
-                mr_content = edit_in_editor(result, console, ".md")
-                break
-
-        except Exception as e:
-            logger.exception(f"Unexpected error during generation: {e}")
-            result = handle_generation_error(
-                console,
-                e,
-                fallback_content=fallback_template,
-                operation="MR description generation",
-            )
-            if result is not None:
-                mr_content = edit_in_editor(result, console, ".md")
-                break
-
-    if not mr_content:
-        print_error(console, "Failed to generate MR description")
-        console.print("[yellow]Tip: Run 'devtool doctor' to check your configuration.[/yellow]")
-        sys.exit(1)
-
-    assert mr_content is not None
+    mr_content = generate_with_retry(
+        console,
+        prompt,
+        str(repo.working_dir),
+        fallback_template,
+        "MR description",
+        section_marker="## Commits",
+    )
 
     mr_content = clean_mr_output(mr_content)
 

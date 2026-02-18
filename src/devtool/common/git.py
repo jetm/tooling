@@ -10,12 +10,16 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    import git
     from rich.console import Console
 
 logger = logging.getLogger(__name__)
+
+TICKET_PATTERN = re.compile(r"^[Ii][Oo][Tt][Ii][Ll]-(\d+)")
 
 # Patterns matching common LLM preamble lines that should be skipped during title parsing
 PREAMBLE_PATTERNS = re.compile(
@@ -117,7 +121,7 @@ def edit_in_editor(content: str, console: Console, file_suffix: str = ".txt") ->
 
 def extract_ticket_number(branch_name: str) -> str | None:
     """Extract IOTIL ticket number from branch name."""
-    match = re.match(r"^[Ii][Oo][Tt][Ii][Ll]-(\d+)", branch_name)
+    match = TICKET_PATTERN.match(branch_name)
     if match:
         return match.group(1)
     return None
@@ -145,7 +149,7 @@ def strip_markdown_code_blocks(text: str) -> str:
     return text
 
 
-def get_target_branch_from_config(repo: object) -> str | None:
+def get_target_branch_from_config(repo: git.Repo) -> str | None:
     """Get the target branch for MR from git config.
 
     Reads the branch-switch.name config value, which is set by devtool switch-main
@@ -210,3 +214,81 @@ def handle_generation_error(
         sys.exit(1)
 
     return None
+
+
+def get_precommit_skip_env() -> dict[str, str]:
+    """Return environment overrides to skip all pre-commit hooks.
+
+    Uses SKIP_PRECOMMIT as a single toggle. When set to a truthy value, this
+    reads .pre-commit-config.yaml to build a comma-separated SKIP list.
+    """
+
+    def is_truthy_env(value: str | None) -> bool:
+        if value is None:
+            return False
+        normalized = value.strip().lower()
+        if not normalized:
+            return False
+        return normalized not in {"0", "false", "no", "off", "n"}
+
+    if not is_truthy_env(os.environ.get("SKIP_PRECOMMIT")):
+        return {}
+
+    fallback_hook_ids = [
+        "ruff-format",
+        "ruff",
+        "shfmt",
+        "shellcheck",
+        "validate-python-version",
+    ]
+
+    def find_repo_root() -> Path | None:
+        try:
+            result = subprocess.run(
+                ["git", "rev-parse", "--show-toplevel"],
+                capture_output=True,
+                text=True,
+                timeout=3,
+            )
+            if result.returncode == 0:
+                root = result.stdout.strip()
+                if root:
+                    return Path(root)
+        except Exception:
+            pass
+
+        cwd = Path.cwd()
+        for parent in (cwd, *cwd.parents):
+            if (parent / ".pre-commit-config.yaml").exists():
+                return parent
+        return None
+
+    def parse_hook_ids(config_text: str) -> list[str]:
+        hook_ids: list[str] = []
+        seen: set[str] = set()
+        for line in config_text.splitlines():
+            match = re.match(r"^\s*-\s*id:\s*([^\s#]+)", line)
+            if not match:
+                continue
+            hook_id = match.group(1).strip().strip("\"'")
+            if hook_id and hook_id not in seen:
+                seen.add(hook_id)
+                hook_ids.append(hook_id)
+        return hook_ids
+
+    repo_root = find_repo_root()
+    if not repo_root:
+        return {"SKIP": ",".join(fallback_hook_ids)}
+
+    config_path = repo_root / ".pre-commit-config.yaml"
+    try:
+        with open(config_path, encoding="utf-8") as f:
+            config_text = f.read()
+        hook_ids = parse_hook_ids(config_text)
+    except Exception:
+        hook_ids = []
+
+    if not hook_ids:
+        hook_ids = fallback_hook_ids
+
+    return {"SKIP": ",".join(hook_ids)}

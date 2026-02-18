@@ -16,6 +16,54 @@ import click
 logger = logging.getLogger(__name__)
 
 
+def _check_executable(
+    name: str,
+    console: object,
+    record_check: object,
+    *,
+    required: bool = True,
+    record_name: str | None = None,
+    install_hint: str | None = None,
+) -> str | None:
+    """Check if an executable exists and can report its version.
+
+    Returns the version string on success, None on failure.
+    """
+    check_name = record_name or name
+
+    console.print(f"Checking {name}... ", end="")
+    if not shutil.which(name):
+        if required:
+            console.print("[red]✗ Not found[/red]")
+        else:
+            console.print("[yellow]✗ Not found[/yellow]")
+        if install_hint:
+            console.print(f"  [yellow]{install_hint}[/yellow]")
+        record_check(check_name, False, "Not found")
+        return None
+
+    try:
+        result = subprocess.run([name, "--version"], capture_output=True, text=True, timeout=10)
+        if result.returncode == 0:
+            version = result.stdout.strip().split("\n")[0]
+            console.print(f"[green]✓[/green] {version}")
+            record_check(check_name, True, version)
+            return version
+        console.print("[red]✗ Failed to get version[/red]")
+        if install_hint:
+            console.print(f"  [yellow]{install_hint}[/yellow]")
+        record_check(check_name, False, "Failed to get version")
+        return None
+    except subprocess.TimeoutExpired:
+        console.print("[red]✗ Timed out[/red]")
+        record_check(check_name, False, "Timed out")
+        return None
+    except Exception as e:
+        console.print(f"[red]✗ Error: {e}[/red]")
+        record_check(check_name, False, str(e))
+        return None
+
+
 @click.command()
 @click.option("--full", is_flag=True, help="Run full diagnostics including live API test")
 @click.option("--export", is_flag=True, help="Export diagnostic info for sharing (sanitized)")
@@ -50,75 +98,21 @@ def doctor(ctx: click.Context, full: bool, export: bool, plain_text: bool, verbo
         diagnostic_info["checks"][name] = {"passed": passed, "details": details}
 
     # Check git
-    console.print("Checking git... ", end="")
-    if shutil.which("git"):
-        try:
-            result = subprocess.run(["git", "--version"], capture_output=True, text=True, timeout=10)
-            if result.returncode == 0:
-                version = result.stdout.strip()
-                console.print(f"[green]✓[/green] {version}")
-                record_check("git", True, version)
-            else:
-                console.print("[red]✗ Failed to get version[/red]")
-                record_check("git", False, "Failed to get version")
-                all_passed = False
-        except Exception as e:
-            console.print(f"[red]✗ Error: {e}[/red]")
-            record_check("git", False, str(e))
-            all_passed = False
-    else:
-        console.print("[red]✗ Not found[/red]")
-        record_check("git", False, "Not found")
+    if _check_executable("git", console, record_check) is None:
         all_passed = False
 
-    # Check glab
-    console.print("Checking glab... ", end="")
-    if shutil.which("glab"):
-        try:
-            result = subprocess.run(["glab", "--version"], capture_output=True, text=True, timeout=10)
-            if result.returncode == 0:
-                version = result.stdout.strip().split("\n")[0]
-                console.print(f"[green]✓[/green] {version}")
-                record_check("glab", True, version)
-            else:
-                console.print("[red]✗ Failed to get version[/red]")
-                record_check("glab", False, "Failed to get version")
-                all_passed = False
-        except Exception as e:
-            console.print(f"[red]✗ Error: {e}[/red]")
-            record_check("glab", False, str(e))
-            all_passed = False
-    else:
-        console.print("[yellow]✗ Not found (required for mr-desc command)[/yellow]")
-        record_check("glab", False, "Not found (optional)")
+    # Check glab (optional — only needed for mr-desc)
+    _check_executable("glab", console, record_check, required=False)
 
     # Check Claude Code CLI
-    console.print("Checking Claude Code CLI... ", end="")
-    cli_version = None
-    if shutil.which("claude"):
-        try:
-            result = subprocess.run(["claude", "--version"], capture_output=True, text=True, timeout=10)
-            if result.returncode == 0:
-                cli_version = result.stdout.strip()
-                console.print(f"[green]✓[/green] {cli_version}")
-                record_check("claude_cli", True, cli_version)
-            else:
-                console.print("[red]✗ Failed to get version[/red]")
-                console.print("  [yellow]Install from https://claude.ai/download[/yellow]")
-                record_check("claude_cli", False, "Failed to get version")
-                all_passed = False
-        except subprocess.TimeoutExpired:
-            console.print("[red]✗ Timed out[/red]")
-            record_check("claude_cli", False, "Timed out")
-            all_passed = False
-        except Exception as e:
-            console.print(f"[red]✗ Error: {e}[/red]")
-            record_check("claude_cli", False, str(e))
-            all_passed = False
-    else:
-        console.print("[red]✗ Not found[/red]")
-        console.print("  [yellow]Install from https://claude.ai/download[/yellow]")
-        record_check("claude_cli", False, "Not found")
+    cli_version = _check_executable(
+        "claude",
+        console,
+        record_check,
+        record_name="claude_cli",
+        install_hint="Install from https://claude.ai/download",
+    )
+    if cli_version is None:
         all_passed = False
 
     # Check authentication

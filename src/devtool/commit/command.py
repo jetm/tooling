@@ -16,7 +16,10 @@ import click
 from rich.markup import escape as rich_escape
 
 if TYPE_CHECKING:
+    import git
     from rich.console import Console
+
+    from devtool.common.config import ACAConfig
 
 logger = logging.getLogger(__name__)
 
@@ -199,7 +202,7 @@ def score_file_priority(filepath: str, file_content_sample: str | None = None) -
     return base_score
 
 
-def calculate_diff_size(diff_output: str, repo: object | None = None) -> dict[str, int]:
+def calculate_diff_size(diff_output: str, repo: git.Repo | None = None) -> dict[str, int]:
     """Calculate size metrics for a git diff output."""
     import git as gitmodule
 
@@ -220,7 +223,7 @@ def calculate_diff_size(diff_output: str, repo: object | None = None) -> dict[st
     }
 
 
-def extract_diff_statistics(repo: object) -> dict[str, int]:
+def extract_diff_statistics(repo: git.Repo) -> dict[str, int]:
     """Extract insertion/deletion statistics from staged changes."""
     import git as gitmodule
 
@@ -253,26 +256,24 @@ def extract_diff_statistics(repo: object) -> dict[str, int]:
     return result
 
 
-def should_compress_diff(diff_size: dict[str, int], config: object) -> bool:
+def should_compress_diff(diff_size: dict[str, int], config: ACAConfig) -> bool:
     """Determine if diff compression should be applied based on thresholds."""
-    return diff_size["bytes"] > getattr(config, "diff_size_threshold_bytes", 50_000) or diff_size["files"] > getattr(
-        config, "diff_files_threshold", 100
-    )
+    return diff_size["bytes"] > config.diff_size_threshold_bytes or diff_size["files"] > config.diff_files_threshold
 
 
-def compress_diff_stat(repo: object) -> str:
+def compress_diff_stat(repo: git.Repo) -> str:
     """Compress diff using statistical summary."""
     result = repo.git.diff("--cached", "--stat")
     return result if result else "No changes staged"
 
 
-def compress_diff_compact(repo: object) -> str:
+def compress_diff_compact(repo: git.Repo) -> str:
     """Compress diff using minimal context."""
     result = repo.git.diff("--cached", "--compact-summary", "-U1")
     return result if result else "No changes staged"
 
 
-def compress_diff_filtered(repo: object) -> tuple[str, int, int]:
+def compress_diff_filtered(repo: git.Repo) -> tuple[str, int, int]:
     """Compress diff by excluding generated and binary files."""
     all_files = repo.git.diff("--cached", "--name-only").splitlines()
     if not all_files:
@@ -309,13 +310,13 @@ def compress_diff_filtered(repo: object) -> tuple[str, int, int]:
     return result if result else "No changes in included files", len(included_files), len(excluded_files)
 
 
-def compress_diff_function_context(repo: object) -> str:
+def compress_diff_function_context(repo: git.Repo) -> str:
     """Compress diff using function context format."""
     result = repo.git.diff("--cached", "--function-context")
     return result if result else "No changes staged"
 
 
-def compress_diff_smart(repo: object, config: object) -> tuple[str, int, int, int]:
+def compress_diff_smart(repo: git.Repo, config: ACAConfig) -> tuple[str, int, int, int]:
     """Compress diff using smart file prioritization."""
     import git as gitmodule
 
@@ -344,8 +345,8 @@ def compress_diff_smart(repo: object, config: object) -> tuple[str, int, int, in
 
     scored_files.sort(key=lambda x: x[1], reverse=True)
 
-    max_priority = getattr(config, "diff_max_priority_files", 15)
-    token_limit = getattr(config, "diff_token_limit", 100_000)
+    max_priority = config.diff_max_priority_files
+    token_limit = config.diff_token_limit
     excluded_files = [f for f in all_files if f not in [sf[0] for sf in scored_files]]
 
     max_iterations = 3
@@ -413,10 +414,10 @@ def compress_diff_smart(repo: object, config: object) -> tuple[str, int, int, in
 
 
 def apply_compression_strategy(
-    repo: object,
+    repo: git.Repo,
     strategy: str,
     original_diff: str,
-    config: object | None = None,
+    config: ACAConfig | None = None,
 ) -> tuple[str, dict[str, int | str]]:
     """Apply the specified compression strategy to the diff."""
     import git as gitmodule
@@ -460,7 +461,7 @@ def apply_compression_strategy(
 
         if strategy == "smart":
             compression_info["char_count"] = char_count
-            compression_info["token_limit"] = getattr(config, "diff_token_limit", 100_000)
+            compression_info["token_limit"] = config.diff_token_limit
 
         return compressed_diff, compression_info
 
@@ -475,9 +476,9 @@ def apply_compression_strategy(
         }
 
 
-def run_precommit_hooks(repo: object, console: Console, staged_files: list[str]) -> tuple[bool, list[str]]:
+def run_precommit_hooks(repo: git.Repo, console: Console, staged_files: list[str]) -> tuple[bool, list[str]]:
     """Run pre-commit hooks on staged files."""
-    from devtool.common.console import get_precommit_skip_env
+    from devtool.common.git import get_precommit_skip_env
 
     if not shutil.which("pre-commit"):
         console.print("[dim]pre-commit not found, skipping hook validation[/dim]")
@@ -728,83 +729,19 @@ Describe the approach at a conceptual level, not the code changes.
 
 
 # =============================================================================
-# Commit Command
+# Commit Command Helpers
 # =============================================================================
 
 
-@click.command()
-@click.option("--no-compress", is_flag=True, help="Disable diff compression")
-@click.option("--show-prompt", is_flag=True, help="Show the prompt sent to Claude")
-@click.option("--yes", "-y", is_flag=True, help="Auto-confirm the generated commit message")
-@click.option(
-    "--title-only", "-t", is_flag=True, help="Generate only a single-line commit title (implies --yes, uses haiku)"
-)
-@click.option("--plain-text", is_flag=True, help="Output plain text without formatting")
-@click.option("--verbose", "-v", is_flag=True, help="Enable verbose/debug logging")
-@click.pass_context
-def commit(
-    ctx: click.Context,
-    no_compress: bool,
-    show_prompt: bool,
-    yes: bool,
-    title_only: bool,
-    plain_text: bool,
-    verbose: bool,
-) -> None:
-    """Generate a commit message for staged changes."""
-    import git
+def _detect_staged_changes(repo: git.Repo, console: Console) -> tuple[str, str, list[str]]:
+    """Detect staged changes, returning diff output, branch name, and staged file list."""
+    import git as gitmodule
 
-    from devtool.common.claude import (
-        cleanup_temp_prompt_file,
-        create_file_based_prompt,
-        generate_with_progress,
-        should_use_file_based_prompt,
-    )
-    from devtool.common.config import get_config
-    from devtool.common.console import (
-        check_claude_cli,
-        check_dependency,
-        check_version_compatibility,
-        get_console,
-        get_precommit_skip_env,
-        print_error,
-        print_output,
-        setup_logging,
-    )
-    from devtool.common.errors import (
-        ClaudeAuthenticationError,
-        ClaudeCLIError,
-        ClaudeContentError,
-        ClaudeNetworkError,
-        ClaudeRateLimitError,
-        ClaudeTimeoutError,
-    )
-    from devtool.common.git import (
-        edit_in_editor,
-        extract_ticket_number,
-        handle_generation_error,
-        strip_markdown_code_blocks,
-    )
+    from devtool.common.console import print_error
 
-    if title_only:
-        yes = True
-
-    setup_logging(verbose=verbose)
-    console = get_console(plain_text)
-
-    if not check_dependency("git", console):
-        sys.exit(1)
-
-    try:
-        repo = git.Repo(search_parent_directories=True)
-    except git.exc.InvalidGitRepositoryError:
-        print_error(console, "Not in a git repository")
-        sys.exit(1)
-
-    # Check for staged changes
     try:
         head_valid = repo.head.is_valid()
-    except git.exc.GitCommandError:
+    except gitmodule.exc.GitCommandError:
         head_valid = False
 
     if head_valid:
@@ -827,7 +764,7 @@ def commit(
 
     try:
         diff_output = repo.git.diff("--cached")
-    except git.exc.GitCommandError as e:
+    except gitmodule.exc.GitCommandError as e:
         print_error(console, f"Failed to get staged diff: {e}")
         sys.exit(1)
 
@@ -835,41 +772,20 @@ def commit(
         print_error(console, "No staged changes found. Use 'git add' to stage changes.")
         sys.exit(1)
 
-    # Run pre-commit hooks
     staged_files_output = repo.git.diff("--cached", "--name-only")
     staged_files = [f for f in staged_files_output.split("\n") if f]
 
-    if get_precommit_skip_env():
-        console.print("[yellow]⚠ Pre-commit hooks will be completely bypassed (validation + commit phase)[/yellow]")
+    return diff_output, branch_name, staged_files
 
-    hooks_passed, modified_files = run_precommit_hooks(repo, console, staged_files)
 
-    if not hooks_passed:
-        print_error(console, "Pre-commit hooks failed. Please fix the issues and try again.")
-        console.print("[yellow]Tip: Set SKIP_PRECOMMIT=1 to bypass hooks temporarily[/yellow]")
-        sys.exit(1)
-
-    if modified_files:
-        console.print("\n[yellow bold]⚠ Pre-commit hooks modified files:[/yellow bold]\n")
-        for file in modified_files:
-            console.print(f"  • {file}")
-        console.print()
-        console.print("[cyan]The following files were automatically formatted or modified by hooks.[/cyan]")
-        console.print("[cyan]Please review the changes, stage them, and run 'devtool commit' again.[/cyan]")
-        console.print()
-        console.print("[dim]Next steps:[/dim]")
-        console.print("  1. Review the modified files: git diff")
-        console.print("  2. Stage the changes: git add <files>")
-        console.print("  3. Run 'devtool commit' again")
-        sys.exit(0)
-
-    # Check Claude Code CLI
-    if not check_claude_cli(console):
-        sys.exit(1)
-    check_version_compatibility(console)
-
-    # Check diff size and apply compression if needed
-    config = get_config()
+def _apply_compression(
+    diff_output: str,
+    repo: git.Repo,
+    config: ACAConfig,
+    console: Console,
+    no_compress: bool,
+) -> tuple[str, dict[str, int | str] | None, str]:
+    """Check diff size and apply compression if needed."""
     diff_size = calculate_diff_size(diff_output, repo)
     diff_stats = extract_diff_statistics(repo)
     needs_compression = should_compress_diff(diff_size, config)
@@ -878,12 +794,12 @@ def commit(
     compression_info: dict[str, int | str] | None = None
     diff_format_note = ""
 
-    compression_commit_phase_enabled = config.diff_compression_enabled and not no_compress
+    compression_enabled = config.diff_compression_enabled and not no_compress
 
     if no_compress and config.diff_compression_enabled:
         console.print("[yellow]⚠ Compression disabled via --no-compress flag[/yellow]")
 
-    if needs_compression and compression_commit_phase_enabled:
+    if needs_compression and compression_enabled:
         size_kb = diff_size["bytes"] / 1024
         threshold_kb = config.diff_size_threshold_bytes / 1024
         logger.debug(
@@ -977,11 +893,19 @@ def commit(
     else:
         logger.debug(f"Diff size within limits: {diff_size['bytes'] / 1024:.1f} KB, {diff_size['files']} files")
 
-    ticket_number = extract_ticket_number(branch_name)
+    return final_diff, compression_info, diff_format_note
 
-    # Build prompt
+
+def _build_commit_prompt(
+    final_diff: str,
+    branch_name: str,
+    ticket_number: str | None,
+    title_only: bool,
+    diff_format_note: str,
+) -> str:
+    """Build the commit message generation prompt."""
     commit_prompt = COMMIT_TITLE_ONLY_PROMPT if title_only else COMMIT_PROMPT
-    prompt = f"""{commit_prompt}
+    return f"""{commit_prompt}
 
 ## Git Context
 - Branch: {branch_name}
@@ -990,6 +914,162 @@ def commit(
 ## Staged Changes Diff{diff_format_note}
 {final_diff}
 """
+
+
+def _display_and_confirm_prompt(
+    console: Console,
+    prompt: str,
+    prepared_prompt: str | None,
+    prepared_temp_file: str | None,
+    prompt_size_kb: float,
+    yes: bool,
+) -> bool:
+    """Display prompt preview and ask for confirmation. Returns True to proceed."""
+    from devtool.common.claude import cleanup_temp_prompt_file
+
+    display_prompt = prepared_prompt if prepared_prompt is not None else prompt
+    display_size_bytes = len(display_prompt.encode("utf-8"))
+    display_size_kb = display_size_bytes / 1024
+    prompt_size_bytes = int(prompt_size_kb * 1024)
+
+    console.print()
+    console.print("[bold]═══════════════════════════════════════════════════════════════════[/bold]")
+    console.print("[bold]PROMPT PREVIEW[/bold]")
+    if prepared_prompt is not None:
+        console.print(f"[dim]Size: {display_size_kb:.1f} KB ({display_size_bytes:,} characters)[/dim]")
+        console.print(
+            "[yellow]Note: File-based delivery active. Diff content is in the temp file shown below.[/yellow]"
+        )
+    else:
+        console.print(f"[dim]Size: {prompt_size_kb:.1f} KB ({prompt_size_bytes:,} characters)[/dim]")
+    console.print("[bold]═══════════════════════════════════════════════════════════════════[/bold]")
+    console.print()
+    console.print(display_prompt)
+    console.print()
+    console.print("[bold]═══════════════════════════════════════════════════════════════════[/bold]")
+    console.print()
+
+    if yes:
+        return True
+
+    try:
+        confirm = input("Send this prompt to Claude? [y/n]: ").strip().lower()
+    except EOFError, KeyboardInterrupt:
+        if prepared_temp_file is not None:
+            cleanup_temp_prompt_file(prepared_temp_file)
+        console.print("\nAborted.")
+        sys.exit(0)
+
+    if confirm not in ("y", "yes"):
+        if prepared_temp_file is not None:
+            cleanup_temp_prompt_file(prepared_temp_file)
+        return False
+
+    return True
+
+
+# =============================================================================
+# Commit Command
+# =============================================================================
+
+
+@click.command()
+@click.option("--no-compress", is_flag=True, help="Disable diff compression")
+@click.option("--show-prompt", is_flag=True, help="Show the prompt sent to Claude")
+@click.option("--yes", "-y", is_flag=True, help="Auto-confirm the generated commit message")
+@click.option(
+    "--title-only", "-t", is_flag=True, help="Generate only a single-line commit title (implies --yes, uses haiku)"
+)
+@click.option("--plain-text", is_flag=True, help="Output plain text without formatting")
+@click.option("--verbose", "-v", is_flag=True, help="Enable verbose/debug logging")
+@click.pass_context
+def commit(
+    ctx: click.Context,
+    no_compress: bool,
+    show_prompt: bool,
+    yes: bool,
+    title_only: bool,
+    plain_text: bool,
+    verbose: bool,
+) -> None:
+    """Generate a commit message for staged changes."""
+    import git
+
+    from devtool.common.claude import (
+        cleanup_temp_prompt_file,
+        create_file_based_prompt,
+        should_use_file_based_prompt,
+    )
+    from devtool.common.config import get_config
+    from devtool.common.console import (
+        check_claude_cli,
+        check_dependency,
+        check_version_compatibility,
+        get_console,
+        print_error,
+        print_output,
+        setup_logging,
+    )
+    from devtool.common.git import (
+        edit_in_editor,
+        extract_ticket_number,
+        get_precommit_skip_env,
+        strip_markdown_code_blocks,
+    )
+
+    if title_only:
+        yes = True
+
+    setup_logging(verbose=verbose)
+    console = get_console(plain_text)
+
+    if not check_dependency("git", console):
+        sys.exit(1)
+
+    try:
+        repo = git.Repo(search_parent_directories=True)
+    except git.exc.InvalidGitRepositoryError:
+        print_error(console, "Not in a git repository")
+        sys.exit(1)
+
+    diff_output, branch_name, staged_files = _detect_staged_changes(repo, console)
+
+    if get_precommit_skip_env():
+        console.print("[yellow]⚠ Pre-commit hooks will be completely bypassed (validation + commit phase)[/yellow]")
+
+    hooks_passed, modified_files = run_precommit_hooks(repo, console, staged_files)
+
+    if not hooks_passed:
+        print_error(console, "Pre-commit hooks failed. Please fix the issues and try again.")
+        console.print("[yellow]Tip: Set SKIP_PRECOMMIT=1 to bypass hooks temporarily[/yellow]")
+        sys.exit(1)
+
+    if modified_files:
+        console.print("\n[yellow bold]⚠ Pre-commit hooks modified files:[/yellow bold]\n")
+        for file in modified_files:
+            console.print(f"  • {file}")
+        console.print()
+        console.print("[cyan]The following files were automatically formatted or modified by hooks.[/cyan]")
+        console.print("[cyan]Please review the changes, stage them, and run 'devtool commit' again.[/cyan]")
+        console.print()
+        console.print("[dim]Next steps:[/dim]")
+        console.print("  1. Review the modified files: git diff")
+        console.print("  2. Stage the changes: git add <files>")
+        console.print("  3. Run 'devtool commit' again")
+        sys.exit(0)
+
+    # Check Claude Code CLI
+    cli_version = check_claude_cli(console)
+    if cli_version is None:
+        sys.exit(1)
+    check_version_compatibility(console, version=cli_version)
+
+    config = get_config()
+    final_diff, compression_info, diff_format_note = _apply_compression(diff_output, repo, config, console, no_compress)
+
+    ticket_number = extract_ticket_number(branch_name)
+
+    prompt = _build_commit_prompt(final_diff, branch_name, ticket_number, title_only, diff_format_note)
 
     # Validate prompt size
     prompt_size_bytes = len(prompt.encode("utf-8"))
@@ -1007,7 +1087,7 @@ def commit(
         console.print("[dim]Tip: Set ACA_DIFF_COMPRESSION_STRATEGY=stat for maximum compression[/dim]")
         console.print()
 
-        if not (needs_compression and compression_commit_phase_enabled):
+        if compression_info is None:
             console.print("[dim]Tip: Set ACA_DIFF_COMPRESSION_ENABLED=true to enable automatic compression[/dim]")
             console.print()
     else:
@@ -1035,49 +1115,13 @@ def commit(
             prepared_prompt, prepared_temp_file = file_result
             logger.debug(f"Pre-created file-based prompt for --show-prompt preview: {prepared_temp_file}")
 
-    display_prompt = prepared_prompt if prepared_prompt is not None else prompt
-    display_size_bytes = len(display_prompt.encode("utf-8"))
-    display_size_kb = display_size_bytes / 1024
-
     if show_prompt:
-        console.print()
-        console.print("[bold]═══════════════════════════════════════════════════════════════════[/bold]")
-        console.print("[bold]PROMPT PREVIEW[/bold]")
-        if prepared_prompt is not None:
-            console.print(f"[dim]Size: {display_size_kb:.1f} KB ({display_size_bytes:,} characters)[/dim]")
-            console.print(
-                "[yellow]Note: File-based delivery active. Diff content is in the temp file shown below.[/yellow]"
-            )
-        else:
-            console.print(f"[dim]Size: {prompt_size_kb:.1f} KB ({prompt_size_bytes:,} characters)[/dim]")
-        console.print("[bold]═══════════════════════════════════════════════════════════════════[/bold]")
-        console.print()
-        console.print(display_prompt)
-        console.print()
-        console.print("[bold]═══════════════════════════════════════════════════════════════════[/bold]")
-        console.print()
-
-        if not yes:
-            try:
-                confirm = input("Send this prompt to Claude? [y/n]: ").strip().lower()
-            except EOFError, KeyboardInterrupt:
-                if prepared_temp_file is not None:
-                    cleanup_temp_prompt_file(prepared_temp_file)
-                console.print("\nAborted.")
-                sys.exit(0)
-
-            if confirm not in ("y", "yes"):
-                if prepared_temp_file is not None:
-                    cleanup_temp_prompt_file(prepared_temp_file)
-                console.print("Aborted.")
-                sys.exit(0)
+        if not _display_and_confirm_prompt(console, prompt, prepared_prompt, prepared_temp_file, prompt_size_kb, yes):
+            console.print("Aborted.")
+            sys.exit(0)
 
     # Prepare fallback template
     fallback_template = "<type>(<scope>): <subject>" if title_only else get_commit_template(branch_name, ticket_number)
-
-    # Generate commit message with retry and fallback support
-    commit_message: str | None = None
-    max_generation_attempts = 3
 
     generation_prompt = prepared_prompt if prepared_prompt is not None else prompt
     skip_auto_file_delivery = prepared_prompt is not None
@@ -1086,115 +1130,38 @@ def commit(
         if prepared_temp_file is not None:
             cleanup_temp_prompt_file(prepared_temp_file)
 
-    for generation_attempt in range(max_generation_attempts):
-        try:
-            raw_response = generate_with_progress(
-                console,
-                generation_prompt,
-                str(repo.working_dir),
-                message="Generating commit title..." if title_only else "Generating commit message...",
-                model="haiku" if title_only else None,
-                skip_file_based_delivery=skip_auto_file_delivery,
-            )
-            commit_message = extract_commit_message(raw_response)
-            if commit_message:
-                commit_message = strip_markdown_code_blocks(commit_message)
-            if title_only and commit_message:
-                commit_message = truncate_title(commit_message)
-            break
+    def post_process(raw: str) -> str | None:
+        msg = extract_commit_message(raw)
+        if msg:
+            msg = strip_markdown_code_blocks(msg)
+        if title_only and msg:
+            msg = truncate_title(msg)
+        return msg
 
-        except ClaudeAuthenticationError as e:
-            logger.error(f"Authentication error: {e}")
-            if console.no_color:
-                console.print(e.format_error())
-            else:
-                console.print(f"[red]{e.format_error()}[/red]")
+    from devtool.common.claude import generate_with_retry
+
+    try:
+        commit_message = generate_with_retry(
+            console,
+            generation_prompt,
+            str(repo.working_dir),
+            fallback_template,
+            "commit title" if title_only else "commit message",
+            model="haiku" if title_only else None,
+            cleanup_fn=cleanup_prepared_file,
+            skip_file_based_delivery=skip_auto_file_delivery,
+            post_process_fn=post_process,
+            edit_suffix=".txt",
+        )
+    except OSError as e:
+        import errno
+
+        if e.errno == errno.E2BIG or "Argument list too long" in str(e):
+            logger.error(f"ARG_MAX exceeded (OSError): {e}")
+            _print_argmax_error(console, config)
             cleanup_prepared_file()
             sys.exit(1)
-
-        except (ClaudeNetworkError, ClaudeTimeoutError, ClaudeRateLimitError) as e:
-            if compression_info is not None and str(compression_info.get("strategy", "none")) != "none":
-                logger.warning(
-                    f"Transient error (attempt {generation_attempt + 1}): {e} "
-                    f"[compression: {compression_info['strategy']}, size: {int(compression_info['compressed_size']) / 1024:.1f}KB]"
-                )
-            else:
-                logger.warning(f"Transient error (attempt {generation_attempt + 1}): {e}")
-            result = handle_generation_error(
-                console,
-                e,
-                fallback_content=fallback_template,
-                operation="commit message generation",
-            )
-            if result is not None:
-                commit_message = edit_in_editor(result, console, ".txt")
-                commit_message = "\n".join(
-                    line for line in commit_message.split("\n") if not line.strip().startswith("#")
-                ).strip()
-                break
-
-        except (ClaudeCLIError, ClaudeContentError) as e:
-            error_str = str(e)
-            if "Argument list too long" in error_str or (hasattr(e, "cause") and "E2BIG" in str(e.cause)):
-                logger.error(f"ARG_MAX exceeded error: {e}")
-                _print_argmax_error(console, config)
-                cleanup_prepared_file()
-                sys.exit(1)
-
-            if compression_info is not None and str(compression_info.get("strategy", "none")) != "none":
-                logger.error(f"Non-recoverable error: {e} [compression: {compression_info['strategy']}]")
-                console.print(
-                    "[dim]Tip: If generation fails consistently with compressed diffs, "
-                    "try ACA_DIFF_COMPRESSION_ENABLED=false[/dim]"
-                )
-            else:
-                logger.error(f"Non-recoverable error: {e}")
-            result = handle_generation_error(
-                console,
-                e,
-                fallback_content=fallback_template,
-                operation="commit message generation",
-            )
-            if result is not None:
-                commit_message = edit_in_editor(result, console, ".txt")
-                commit_message = "\n".join(
-                    line for line in commit_message.split("\n") if not line.strip().startswith("#")
-                ).strip()
-                break
-
-        except OSError as e:
-            import errno
-
-            if e.errno == errno.E2BIG or "Argument list too long" in str(e):
-                logger.error(f"ARG_MAX exceeded (OSError): {e}")
-                _print_argmax_error(console, config)
-                cleanup_prepared_file()
-                sys.exit(1)
-            raise
-
-        except Exception as e:
-            logger.exception(f"Unexpected error during generation: {e}")
-            result = handle_generation_error(
-                console,
-                e,
-                fallback_content=fallback_template,
-                operation="commit message generation",
-            )
-            if result is not None:
-                commit_message = edit_in_editor(result, console, ".txt")
-                commit_message = "\n".join(
-                    line for line in commit_message.split("\n") if not line.strip().startswith("#")
-                ).strip()
-                break
-
-    cleanup_prepared_file()
-
-    if not commit_message:
-        print_error(console, "Failed to generate a valid commit message")
-        console.print("[yellow]Tip: Run 'devtool doctor' to check your configuration.[/yellow]")
-        sys.exit(1)
-
-    assert commit_message is not None
+        raise
 
     # Display the generated message and prompt for action
     if yes:
@@ -1257,7 +1224,7 @@ def _fallback_compression_info(diff_output: str) -> dict[str, int | str]:
     }
 
 
-def _print_argmax_error(console: Console, config: object) -> None:
+def _print_argmax_error(console: Console, config: ACAConfig) -> None:
     """Print ARG_MAX exceeded error with guidance."""
     console.print()
     console.print("[red bold]Error: Prompt too large for command-line delivery[/red bold]")
@@ -1272,7 +1239,7 @@ def _print_argmax_error(console: Console, config: object) -> None:
     console.print("  2. Use a more aggressive compression strategy: ACA_DIFF_COMPRESSION_STRATEGY=stat")
     console.print("  3. Stage fewer files and commit in smaller batches")
     console.print()
-    if not getattr(config, "prompt_file_enabled", True):
+    if not config.prompt_file_enabled:
         console.print(
             "[cyan]File-based delivery is currently DISABLED. Enable it with: ACA_PROMPT_FILE_ENABLED=true[/cyan]"
         )

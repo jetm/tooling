@@ -12,7 +12,11 @@ from typing import TYPE_CHECKING
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from rich.console import Console
+
+    from devtool.common.config import ACAConfig
 
 logger = logging.getLogger(__name__)
 
@@ -177,16 +181,109 @@ def generate_with_progress(
         )
 
 
+def generate_with_retry(
+    console: Console,
+    prompt: str,
+    cwd: str,
+    fallback_template: str,
+    operation: str,
+    *,
+    model: str | None = None,
+    cleanup_fn: Callable[[], None] | None = None,
+    skip_file_based_delivery: bool = False,
+    section_marker: str | None = None,
+    post_process_fn: Callable[[str], str | None] | None = None,
+    edit_suffix: str = ".md",
+    max_attempts: int = 3,
+) -> str:
+    """Generate content with retry, error handling, and fallback template support.
+
+    Returns the generated (and optionally post-processed) content, or exits on failure.
+    """
+    import sys
+
+    from devtool.common.console import print_error
+    from devtool.common.errors import (
+        ClaudeAuthenticationError,
+        ClaudeCLIError,
+        ClaudeContentError,
+        ClaudeNetworkError,
+        ClaudeRateLimitError,
+        ClaudeTimeoutError,
+    )
+    from devtool.common.git import edit_in_editor, handle_generation_error
+
+    result_content: str | None = None
+
+    for attempt in range(max_attempts):
+        try:
+            raw = generate_with_progress(
+                console,
+                prompt,
+                cwd,
+                message=f"Generating {operation}...",
+                model=model,
+                skip_file_based_delivery=skip_file_based_delivery,
+                section_marker=section_marker,
+            )
+            if post_process_fn is not None:
+                result_content = post_process_fn(raw)
+            else:
+                result_content = raw
+            break
+
+        except ClaudeAuthenticationError as e:
+            logger.error(f"Authentication error: {e}")
+            if console.no_color:
+                console.print(e.format_error())
+            else:
+                console.print(f"[red]{e.format_error()}[/red]")
+            if cleanup_fn:
+                cleanup_fn()
+            sys.exit(1)
+
+        except (ClaudeNetworkError, ClaudeTimeoutError, ClaudeRateLimitError) as e:
+            logger.warning(f"Transient error (attempt {attempt + 1}): {e}")
+            fallback = handle_generation_error(console, e, fallback_content=fallback_template, operation=operation)
+            if fallback is not None:
+                result_content = edit_in_editor(fallback, console, edit_suffix)
+                break
+
+        except (ClaudeCLIError, ClaudeContentError) as e:
+            logger.error(f"Non-recoverable error: {e}")
+            fallback = handle_generation_error(console, e, fallback_content=fallback_template, operation=operation)
+            if fallback is not None:
+                result_content = edit_in_editor(fallback, console, edit_suffix)
+                break
+
+        except Exception as e:
+            logger.exception(f"Unexpected error during generation: {e}")
+            fallback = handle_generation_error(console, e, fallback_content=fallback_template, operation=operation)
+            if fallback is not None:
+                result_content = edit_in_editor(fallback, console, edit_suffix)
+                break
+
+    if cleanup_fn:
+        cleanup_fn()
+
+    if not result_content:
+        print_error(console, f"Failed to generate {operation}")
+        console.print("[yellow]Tip: Run 'devtool doctor' to check your configuration.[/yellow]")
+        sys.exit(1)
+
+    return result_content
+
+
 # ---- File-based prompt delivery ----
 
 
-def should_use_file_based_prompt(prompt: str, config: object) -> bool:
+def should_use_file_based_prompt(prompt: str, config: ACAConfig) -> bool:
     """Determine if file-based prompt delivery should be used."""
-    if not getattr(config, "prompt_file_enabled", True):
+    if not config.prompt_file_enabled:
         return False
 
     prompt_size = len(prompt.encode("utf-8"))
-    threshold = getattr(config, "prompt_file_threshold_bytes", 50_000)
+    threshold = config.prompt_file_threshold_bytes
 
     if prompt_size > threshold:
         logger.debug(
