@@ -38,6 +38,9 @@ async def _generate_with_claude_impl(
         TextBlock,
         query,
     )
+    from claude_agent_sdk._errors import MessageParseError
+    from claude_agent_sdk._internal import client as _sdk_client
+    from claude_agent_sdk._internal.message_parser import parse_message as _original_parse
 
     from devtool.common.config import get_config
     from devtool.common.errors import (
@@ -46,6 +49,18 @@ async def _generate_with_claude_impl(
         _classify_error,
         collect_error_context,
     )
+
+    # Monkey-patch SDK to tolerate unknown message types (e.g. rate_limit_event)
+    # instead of raising MessageParseError which kills the async generator.
+    def _lenient_parse_message(data: dict) -> object:
+        try:
+            return _original_parse(data)
+        except MessageParseError:
+            msg_type = data.get("type", "unknown") if isinstance(data, dict) else "unknown"
+            logger.debug(f"Skipping unrecognized SDK message type: {msg_type}")
+            return SystemMessage(subtype="unknown", data=data or {})
+
+    _sdk_client.parse_message = _lenient_parse_message
 
     config = get_config()
     _timeout = timeout if timeout is not None else config.timeout
