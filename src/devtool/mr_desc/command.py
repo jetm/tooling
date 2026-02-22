@@ -677,3 +677,27 @@ def mr_desc(ctx: click.Context, base: str | None, plain_text: bool, verbose: boo
     except subprocess.CalledProcessError as e:
         print_error(console, f"glab mr create failed: {e}")
         sys.exit(1)
+
+    # Post-MR Jira integration (non-fatal)
+    from devtool.common.git import extract_issue_key
+
+    issue_key = extract_issue_key(current_branch)
+    if issue_key:
+        # Backfill Jira description
+        try:
+            diff = repo.git.diff(log_base, current_branch)
+            if diff.strip():
+                from devtool.jira.backfill import backfill_jira_issue
+
+                backfill_jira_issue(issue_key, diff, str(repo.working_dir), console)
+        except Exception as e:
+            console.print(f"[yellow]Warning: Jira backfill failed: {e}[/yellow]")
+
+        # Transition to Peer Review
+        try:
+            from devtool.jira.status import transition_jira_issue
+
+            transition_jira_issue(issue_key, "Peer Review")
+            console.print(f"[green]{issue_key}[/green] -> Peer Review")
+        except Exception as e:
+            console.print(f"[yellow]Warning: Jira status transition failed: {e}[/yellow]")

@@ -15,12 +15,13 @@ from urllib.parse import quote
 import click
 from rich.console import Console
 
+from devtool.jira.client import JIRA_BASE_URL, connect_jira, load_credentials
+
 logger = logging.getLogger(__name__)
 
 # =============================================================================
 # Jira/Confluence Configuration
 # =============================================================================
-JIRA_BASE_URL = "https://linaro.atlassian.net"
 CONFLUENCE_BASE_URL = "https://linaro.atlassian.net/wiki"
 CONFLUENCE_SPACE_KEY = "~631a07203e578bb3b500554a"
 CONFLUENCE_PARENT_PAGE_ID = "30666293285"
@@ -33,21 +34,6 @@ APPFOX_API_URL = "https://ac-cloud.com/compliance/api/v1"
 # Jira Query Configuration
 JIRA_PROJECTS = ["IOTIL", "IS"]
 JIRA_DONE_STATUSES = ["Closed", "Done", "Fixed", "Ready For Release", "Resolved"]
-
-
-# =============================================================================
-# Credential Loading
-# =============================================================================
-def load_credentials() -> tuple[str | None, str | None]:
-    """Load Jira credentials from environment variables.
-
-    Returns:
-        A tuple of (email, token) where either value may be None if the
-        corresponding environment variable is not set.
-    """
-    email = os.environ.get("JIRA_EMAIL")
-    token = os.environ.get("JIRA_TOKEN")
-    return (email, token)
 
 
 def load_appfox_api_key() -> str | None:
@@ -135,52 +121,6 @@ def _extract_issue_data(issue: dict) -> dict:
         "Summary": fields.get("summary", ""),
         "Status": fields.get("status", {}).get("name", "Unknown"),
     }
-
-
-# =============================================================================
-# Jira Integration Functions
-# =============================================================================
-def connect_jira():
-    """Initialize Jira client with credentials.
-
-    Returns:
-        A configured Jira client instance.
-
-    Raises:
-        ValueError: If credentials are missing.
-        ApiError: If authentication fails.
-    """
-    from devtool._deps import require
-
-    atlassian = require("atlassian", "weekly-status")
-    Jira = atlassian.Jira
-    ApiError = atlassian.errors.ApiError
-
-    logger.debug(f"Connecting to Jira at {JIRA_BASE_URL}")
-
-    email, token = load_credentials()
-    if not email or not token:
-        raise ValueError(
-            "Missing required environment variables: JIRA_EMAIL and/or JIRA_TOKEN\n"
-            "Set them with:\n"
-            '  export JIRA_EMAIL="your-email@example.com"\n'
-            '  export JIRA_TOKEN="your-api-token"'
-        )
-
-    try:
-        jira = Jira(url=JIRA_BASE_URL, username=email, password=token, cloud=True)
-        logger.debug("Successfully connected to Jira")
-        return jira
-    except ApiError as e:
-        raise ApiError(
-            f"Jira authentication failed: {e}\n"
-            "Verify your credentials at: https://id.atlassian.com/manage-profile/security/api-tokens"
-        ) from e
-    except Exception as e:
-        raise RuntimeError(
-            f"Failed to connect to Jira at {JIRA_BASE_URL}: {e}\n"
-            "Check your network connectivity to linaro.atlassian.net"
-        ) from e
 
 
 def connect_confluence():

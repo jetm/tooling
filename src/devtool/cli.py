@@ -11,6 +11,7 @@ from devtool.git.switch_main import switch_main
 from devtool.gitlab.comments import comments
 from devtool.gitlab.merge import merge
 from devtool.gitlab.protect import protect, unprotect
+from devtool.jira.command import jira
 from devtool.mr_desc.command import mr_desc
 from devtool.weekly_status.command import weekly_status
 
@@ -26,6 +27,7 @@ cli.add_command(comments)
 cli.add_command(commit)
 cli.add_command(doctor)
 cli.add_command(gdoc_comments, "gdoc-comments")
+cli.add_command(jira)
 cli.add_command(merge)
 cli.add_command(mr_desc, "mr-desc")
 cli.add_command(protect)

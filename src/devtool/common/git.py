@@ -20,6 +20,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 TICKET_PATTERN = re.compile(r"^[Ii][Oo][Tt][Ii][Ll]-(\d+)")
+ISSUE_KEY_PATTERN = re.compile(r"^([A-Za-z]+-\d+)")
 
 # Patterns matching common LLM preamble lines that should be skipped during title parsing
 PREAMBLE_PATTERNS = re.compile(
@@ -124,6 +125,14 @@ def extract_ticket_number(branch_name: str) -> str | None:
     match = TICKET_PATTERN.match(branch_name)
     if match:
         return match.group(1)
+    return None
+
+
+def extract_issue_key(branch_name: str) -> str | None:
+    """Extract full Jira issue key (e.g., 'IOTIL-1234') from branch name."""
+    match = ISSUE_KEY_PATTERN.match(branch_name)
+    if match:
+        return match.group(1).upper()
     return None
 
 
