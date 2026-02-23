@@ -12,7 +12,7 @@ from devtool.gitlab.comments import comments
 from devtool.gitlab.merge import merge
 from devtool.gitlab.protect import protect, unprotect
 from devtool.jira.command import jira
-from devtool.mr_desc.command import mr_desc
+from devtool.mr_create.command import mr_create
 from devtool.weekly_status.command import weekly_status
 
 
@@ -29,7 +29,7 @@ cli.add_command(doctor)
 cli.add_command(gdoc_comments, "gdoc-comments")
 cli.add_command(jira)
 cli.add_command(merge)
-cli.add_command(mr_desc, "mr-desc")
+cli.add_command(mr_create, "mr-create")
 cli.add_command(protect)
 cli.add_command(switch_main, "switch-main")
 cli.add_command(unprotect)

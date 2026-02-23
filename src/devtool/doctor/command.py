@@ -101,7 +101,7 @@ def doctor(ctx: click.Context, full: bool, export: bool, plain_text: bool, verbo
     if _check_executable("git", console, record_check) is None:
         all_passed = False
 
-    # Check glab (optional — only needed for mr-desc)
+    # Check glab (optional — only needed for mr-create)
     _check_executable("glab", console, record_check, required=False)
 
     # Check Claude Code CLI

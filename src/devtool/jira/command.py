@@ -222,7 +222,7 @@ def backfill(verbose: bool) -> None:
         print_error(console, f"No Jira issue key found in branch name '{branch_name}'")
         sys.exit(1)
 
-    # Compute diff against target branch (same logic as mr-desc)
+    # Compute diff against target branch (same logic as mr-create)
     target_branch = get_target_branch_from_config(repo)
     if not target_branch:
         print_error(

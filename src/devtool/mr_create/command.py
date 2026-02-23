@@ -1,4 +1,4 @@
-"""devtool mr-desc — AI-powered merge request description generation."""
+"""devtool mr-create — AI-powered merge request description generation."""
 
 from __future__ import annotations
 
@@ -162,7 +162,7 @@ def rename_and_push_branch(repo: git.Repo, old_name: str, new_name: str, console
     return True
 
 
-def validate_branch_ready_for_mr(repo: git.Repo, branch_name: str, console: Console) -> bool:
+def validate_branch_ready_for_mr(repo: git.Repo, branch_name: str, target_branch: str, console: Console) -> bool:
     """Validate that a branch is ready for MR creation."""
     import git
 
@@ -187,7 +187,7 @@ def validate_branch_ready_for_mr(repo: git.Repo, branch_name: str, console: Cons
         if choice in ("c", "commit"):
             console.print(
                 "\n[cyan]Please commit your changes first using 'devtool commit' or 'git commit', "
-                "then run 'devtool mr-desc' again.[/cyan]"
+                "then run 'devtool mr-create' again.[/cyan]"
             )
             return False
         elif choice in ("a", "abort"):
@@ -201,12 +201,21 @@ def validate_branch_ready_for_mr(repo: git.Repo, branch_name: str, console: Cons
         unpushed_count = repo.git.rev_list(f"origin/{branch_name}..{branch_name}", "--count")
         unpushed_count = int(unpushed_count.strip())
     except git.exc.GitCommandError:
-        unpushed_count = 0
+        # Remote branch doesn't exist - count local commits relative to target branch
+        try:
+            unpushed_count = repo.git.rev_list(f"origin/{target_branch}..{branch_name}", "--count")
+            unpushed_count = int(unpushed_count.strip())
+        except git.exc.GitCommandError:
+            unpushed_count = 1  # Fallback: at least signal that push is needed
 
     if unpushed_count > 0:
         console.print(f"\n[yellow]You have {unpushed_count} unpushed commit(s). MR requires pushed commits.[/yellow]")
         console.print("\n[bold]Unpushed commits:[/bold]")
-        log_output = repo.git.log(f"origin/{branch_name}..{branch_name}", "--oneline")
+        try:
+            log_output = repo.git.log(f"origin/{branch_name}..{branch_name}", "--oneline")
+        except git.exc.GitCommandError:
+            # Remote branch doesn't exist - show commits relative to target branch
+            log_output = repo.git.log(f"origin/{target_branch}..{branch_name}", "--oneline")
         console.print(log_output)
 
         try:
@@ -218,7 +227,7 @@ def validate_branch_ready_for_mr(repo: git.Repo, branch_name: str, console: Cons
         if choice in ("p", "push"):
             console.print("\nPushing commits to origin...")
             try:
-                repo.git.push("origin", branch_name)
+                repo.git.push("origin", branch_name, "--set-upstream")
                 console.print(f"[green]Successfully pushed {unpushed_count} commit(s) to origin[/green]")
             except git.exc.GitCommandError as e:
                 print_error(console, f"Failed to push: {e}")
@@ -348,7 +357,7 @@ Production impact..."""
 @click.option("--plain-text", is_flag=True, help="Output plain text without formatting")
 @click.option("--verbose", "-v", is_flag=True, help="Enable verbose/debug logging")
 @click.pass_context
-def mr_desc(ctx: click.Context, base: str | None, plain_text: bool, verbose: bool) -> None:
+def mr_create(ctx: click.Context, base: str | None, plain_text: bool, verbose: bool) -> None:
     """Generate a merge request description."""
     import git
 
@@ -653,7 +662,7 @@ def mr_desc(ctx: click.Context, base: str | None, plain_text: bool, verbose: boo
                 "[yellow]Skipping branch rename. Local and remote branch names may differ from MR title.[/yellow]"
             )
 
-    if not validate_branch_ready_for_mr(repo, current_branch, console):
+    if not validate_branch_ready_for_mr(repo, current_branch, target_branch, console):
         sys.exit(1)
 
     # Execute glab command

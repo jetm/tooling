@@ -35,11 +35,11 @@ devtool ask "show disk usage"
 devtool ask "list running processes sorted by memory"
 ```
 
-**`devtool mr-desc`** — Generate MR title and description from branch commits, create draft MR via `glab`.
+**`devtool mr-create`** — Generate MR title and description from branch commits, create draft MR via `glab`.
 
 ```bash
-devtool mr-desc
-devtool mr-desc --base main
+devtool mr-create
+devtool mr-create --base main
 ```
 
 ### GitLab
@@ -116,11 +116,11 @@ src/devtool/
 ├── gdoc/               # devtool gdoc-comments
 ├── git/                # devtool switch-main
 ├── gitlab/             # devtool merge, comments, protect, unprotect
-├── mr_desc/            # devtool mr-desc
+├── mr_create/            # devtool mr-create
 └── weekly_status/      # devtool weekly-status
 ```
 
-AI-powered commands (`ask`, `commit`, `mr-desc`) use the [Claude Agent SDK](https://pypi.org/project/claude-agent-sdk/) which wraps the Claude Code CLI. Authentication is handled by the CLI — no API keys needed.
+AI-powered commands (`ask`, `commit`, `mr-create`) use the [Claude Agent SDK](https://pypi.org/project/claude-agent-sdk/) which wraps the Claude Code CLI. Authentication is handled by the CLI — no API keys needed.
 
 ## Configuration
 

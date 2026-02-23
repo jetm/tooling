@@ -8,7 +8,7 @@ All commands are available through the `devtool` CLI, installed via `uv tool ins
 |---------|---------|----------|
 | `devtool ask` | Linux command assistant — suggests shell commands from natural language | claude-agent-sdk, click |
 | `devtool commit` | AI commit assistant — generates commit messages from staged changes | claude-agent-sdk, GitPython, click |
-| `devtool mr-desc` | Generate MR title/description from branch commits, create draft MR | claude-agent-sdk, GitPython, glab CLI |
+| `devtool mr-create` | Generate MR title/description from branch commits, create draft MR | claude-agent-sdk, GitPython, glab CLI |
 
 These commands use `devtool.common.claude` for Claude Agent SDK integration with retry logic and progress UI.
 

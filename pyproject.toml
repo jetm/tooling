@@ -56,7 +56,7 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "src/devtool/commit/command.py" = ["E501"]  # Long lines in prompt templates
-"src/devtool/mr_desc/command.py" = ["E501"]
+"src/devtool/mr_create/command.py" = ["E501"]
 "src/devtool/ask/command.py" = ["E501"]
 
 [tool.ruff.lint.isort]
