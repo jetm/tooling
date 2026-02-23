@@ -201,7 +201,7 @@ def ask(ctx: click.Context, instruction: str, markdown: bool, verbose: bool) -> 
     config = get_config()
     console = get_console(plain_text=not markdown)
 
-    if not check_claude_cli(console):
+    if not config.openrouter_api_key and not check_claude_cli(console):
         sys.exit(1)
 
     full_prompt = f"{LINUX_ENGINEER_PROMPT}\n\nUser Request: {instruction}"

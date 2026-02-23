@@ -197,9 +197,13 @@ def backfill(verbose: bool) -> None:
     console = get_console(plain_text=False)
 
     # Check dependencies
-    cli_version = check_claude_cli(console)
-    if cli_version is None:
-        sys.exit(1)
+    from devtool.common.config import get_config
+
+    config = get_config()
+    if not config.openrouter_api_key:
+        cli_version = check_claude_cli(console)
+        if cli_version is None:
+            sys.exit(1)
 
     try:
         repo = git.Repo(search_parent_directories=True)

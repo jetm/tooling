@@ -238,30 +238,37 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "atlassian-python-api" },
-    { name = "claude-agent-sdk" },
     { name = "click" },
     { name = "gitpython" },
     { name = "google-api-python-client" },
     { name = "google-auth-oauthlib" },
+    { name = "httpx" },
     { name = "python-dateutil" },
     { name = "python-gitlab" },
     { name = "requests" },
     { name = "rich" },
 ]
 
+[package.optional-dependencies]
+claude = [
+    { name = "claude-agent-sdk" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "atlassian-python-api", specifier = ">=3.0" },
-    { name = "claude-agent-sdk", specifier = ">=0.1.36,<0.2" },
+    { name = "claude-agent-sdk", marker = "extra == 'claude'", specifier = ">=0.1.36,<0.2" },
     { name = "click", specifier = ">=8.1" },
     { name = "gitpython", specifier = ">=3.1" },
     { name = "google-api-python-client", specifier = ">=2.0" },
     { name = "google-auth-oauthlib", specifier = ">=1.0" },
+    { name = "httpx", specifier = ">=0.28" },
     { name = "python-dateutil", specifier = ">=2.8" },
     { name = "python-gitlab", specifier = ">=4.0" },
     { name = "requests", specifier = ">=2.31" },
     { name = "rich", specifier = ">=13.0" },
 ]
+provides-extras = ["claude"]
 
 [[package]]
 name = "gitdb"

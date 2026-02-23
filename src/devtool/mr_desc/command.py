@@ -376,10 +376,15 @@ def mr_desc(ctx: click.Context, base: str | None, plain_text: bool, verbose: boo
         sys.exit(1)
     if not check_dependency("glab", console):
         sys.exit(1)
-    cli_version = check_claude_cli(console)
-    if cli_version is None:
-        sys.exit(1)
-    check_version_compatibility(console, version=cli_version)
+
+    from devtool.common.config import get_config
+
+    config = get_config()
+    if not config.openrouter_api_key:
+        cli_version = check_claude_cli(console)
+        if cli_version is None:
+            sys.exit(1)
+        check_version_compatibility(console, version=cli_version)
 
     try:
         repo = git.Repo(search_parent_directories=True)

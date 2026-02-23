@@ -66,6 +66,10 @@ class ACAConfig:
     # Prompt file-based delivery settings
     prompt_file_threshold_bytes: int = 50_000
     prompt_file_enabled: bool = True
+    # OpenRouter direct API settings
+    openrouter_api_key: str | None = None
+    openrouter_model: str = "anthropic/claude-sonnet-4.5"
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
 
     def _load_from_toml(self, data: dict) -> None:
         """Apply values from parsed TOML data."""
@@ -86,6 +90,8 @@ class ACAConfig:
         self.diff_smart_priority_enabled = data.get("diff_smart_priority_enabled", self.diff_smart_priority_enabled)
         self.prompt_file_threshold_bytes = data.get("prompt_file_threshold_bytes", self.prompt_file_threshold_bytes)
         self.prompt_file_enabled = data.get("prompt_file_enabled", self.prompt_file_enabled)
+        self.openrouter_model = data.get("openrouter_model", self.openrouter_model)
+        self.openrouter_base_url = data.get("openrouter_base_url", self.openrouter_base_url)
 
         # Strategy requires validation
         strategy = data.get("diff_compression_strategy", self.diff_compression_strategy)
@@ -137,6 +143,11 @@ class ACAConfig:
         # Prompt file-based delivery
         self.prompt_file_threshold_bytes = _load_int_env("ACA_PROMPT_FILE_THRESHOLD", self.prompt_file_threshold_bytes)
         self.prompt_file_enabled = _load_bool_env("ACA_PROMPT_FILE_ENABLED", self.prompt_file_enabled)
+
+        # OpenRouter
+        self.openrouter_api_key = os.environ.get("OPENROUTER_API_KEY") or self.openrouter_api_key
+        self.openrouter_model = _load_str_env("ACA_OPENROUTER_MODEL", self.openrouter_model)
+        self.openrouter_base_url = _load_str_env("ACA_OPENROUTER_BASE_URL", self.openrouter_base_url)
 
     def _validate(self) -> None:
         """Validate and clamp configuration values."""

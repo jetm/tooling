@@ -1064,13 +1064,14 @@ def commit(
         console.print("  3. Run 'devtool commit' again")
         sys.exit(0)
 
-    # Check Claude Code CLI
-    cli_version = check_claude_cli(console)
-    if cli_version is None:
-        sys.exit(1)
-    check_version_compatibility(console, version=cli_version)
-
     config = get_config()
+
+    # Check Claude Code CLI (skip if using OpenRouter direct path)
+    if not config.openrouter_api_key:
+        cli_version = check_claude_cli(console)
+        if cli_version is None:
+            sys.exit(1)
+        check_version_compatibility(console, version=cli_version)
     final_diff, compression_info, diff_format_note = _apply_compression(diff_output, repo, config, console, no_compress)
 
     ticket_number = extract_ticket_number(branch_name)

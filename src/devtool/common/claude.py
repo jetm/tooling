@@ -1,4 +1,4 @@
-"""Claude CLI subprocess integration — generation, file-based prompts, progress."""
+"""AI text generation — OpenRouter direct API (fast path) and Claude CLI subprocess (fallback)."""
 
 from __future__ import annotations
 
@@ -21,6 +21,77 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+async def _generate_with_openrouter(
+    prompt: str,
+    system_prompt: str | None,
+    config: ACAConfig,
+    timeout: int,
+) -> str:
+    """Call OpenRouter chat completions API directly via httpx."""
+    import httpx
+
+    from devtool.common.errors import (
+        ClaudeContentError,
+        ClaudeNetworkError,
+        ClaudeTimeoutError,
+        collect_error_context,
+    )
+
+    messages: list[dict[str, str]] = []
+    if system_prompt is not None:
+        messages.append({"role": "system", "content": system_prompt})
+    messages.append({"role": "user", "content": prompt})
+
+    url = f"{config.openrouter_base_url}/chat/completions"
+
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.post(
+                url,
+                headers={"Authorization": f"Bearer {config.openrouter_api_key}"},
+                json={"model": config.openrouter_model, "messages": messages},
+                timeout=timeout,
+            )
+            response.raise_for_status()
+        except httpx.TimeoutException as e:
+            raise ClaudeTimeoutError(
+                message=f"OpenRouter request timed out after {timeout}s",
+                cause=e,
+                context=collect_error_context(),
+                timeout_seconds=timeout,
+            ) from e
+        except httpx.HTTPStatusError as e:
+            status = e.response.status_code
+            body = e.response.text
+            from devtool.common.errors import _classify_error
+
+            raise _classify_error(RuntimeError(f"OpenRouter API error {status}: {body}")) from e
+        except httpx.HTTPError as e:
+            raise ClaudeNetworkError(
+                message=f"OpenRouter request failed: {e}",
+                cause=e,
+                context=collect_error_context(),
+            ) from e
+
+    data = response.json()
+    try:
+        text = data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError) as e:
+        raise ClaudeContentError(
+            message=f"Unexpected OpenRouter response format: {data}",
+            context=collect_error_context(),
+        ) from e
+
+    if not text or not text.strip():
+        raise ClaudeContentError(
+            message="OpenRouter returned an empty response",
+            context=collect_error_context(),
+        )
+
+    logger.debug(f"OpenRouter response received, length: {len(text)}")
+    return text.strip()
+
+
 async def _generate_with_claude_impl(
     prompt: str,
     cwd: str,
@@ -34,19 +105,35 @@ async def _generate_with_claude_impl(
     tools: list[str] | None = None,
 ) -> str:
     """Internal implementation of generate_with_claude without retry."""
-    from claude_agent_sdk import (
-        AssistantMessage,
-        ClaudeAgentOptions,
-        ResultMessage,
-        SystemMessage,
-        TextBlock,
-        query,
-    )
-    from claude_agent_sdk._errors import MessageParseError
-    from claude_agent_sdk._internal import client as _sdk_client
-    from claude_agent_sdk._internal.message_parser import parse_message as _original_parse
-
     from devtool.common.config import get_config
+
+    config = get_config()
+    _timeout = timeout if timeout is not None else config.timeout
+
+    # Fast path: OpenRouter direct API (skip when caller requires tool use)
+    if config.openrouter_api_key and not tools:
+        logger.debug("Using OpenRouter direct API path")
+        return await _generate_with_openrouter(prompt, system_prompt, config, _timeout)
+
+    # Slow path: Claude Code CLI via Agent SDK
+    try:
+        from claude_agent_sdk import (
+            AssistantMessage,
+            ClaudeAgentOptions,
+            ResultMessage,
+            SystemMessage,
+            TextBlock,
+            query,
+        )
+        from claude_agent_sdk._errors import MessageParseError
+        from claude_agent_sdk._internal import client as _sdk_client
+        from claude_agent_sdk._internal.message_parser import parse_message as _original_parse
+    except ImportError:
+        raise RuntimeError(
+            "No AI backend available. Either set OPENROUTER_API_KEY or install the Claude "
+            "Agent SDK: uv tool install -e '.[claude]'"
+        ) from None
+
     from devtool.common.errors import (
         ClaudeContentError,
         ClaudeTimeoutError,
@@ -68,8 +155,6 @@ async def _generate_with_claude_impl(
 
     _sdk_client.parse_message = _lenient_parse_message
 
-    config = get_config()
-    _timeout = timeout if timeout is not None else config.timeout
     _model = model if model is not None else config.default_model
 
     # Check if file-based prompt delivery is needed for large prompts
