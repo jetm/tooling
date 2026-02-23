@@ -13,19 +13,50 @@ logger = logging.getLogger(__name__)
 console = Console()
 
 
+def _detect_mr_url() -> str:
+    """Auto-detect the MR URL for the current branch via glab."""
+    import git
+
+    from devtool.jira.remote_links import find_mr_url_for_branch
+
+    try:
+        repo = git.Repo(search_parent_directories=True)
+    except git.exc.InvalidGitRepositoryError:
+        console.print("[red]Error:[/red] Not in a git repository")
+        sys.exit(1)
+
+    try:
+        branch_name = repo.active_branch.name
+    except TypeError:
+        console.print("[red]Error:[/red] Not on a branch (detached HEAD state)")
+        sys.exit(1)
+
+    mr_url = find_mr_url_for_branch(branch_name, str(repo.working_dir))
+    if not mr_url:
+        console.print(f"[red]Error:[/red] No open MR found for branch '{branch_name}'")
+        sys.exit(1)
+
+    console.print(f"[bold]Auto-detected MR:[/bold] {mr_url}")
+    return mr_url
+
+
 @click.command()
-@click.argument("mr_url")
+@click.argument("mr_url", required=False, default=None)
 @click.option("--token", type=str, default=None, help="GitLab token (or set GITLAB_TOKEN env var)")
 @click.option(
     "--force-rebase", is_flag=True, default=False, help="Rebase even when detailed_merge_status says it is not needed"
 )
-def merge(mr_url: str, token: str | None, force_rebase: bool) -> None:
+def merge(mr_url: str | None, token: str | None, force_rebase: bool) -> None:
     """Approve and merge a GitLab merge request.
 
     MR_URL is the full GitLab merge request URL
     (e.g., https://gitlab.com/group/project/-/merge_requests/123).
+    If omitted, auto-detects the MR for the current branch.
     """
     from gitlab import GitlabAuthenticationError, GitlabGetError
+
+    if mr_url is None:
+        mr_url = _detect_mr_url()
 
     parsed = parse_mr_url(mr_url)
     if not parsed:
