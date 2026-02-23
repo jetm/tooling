@@ -28,6 +28,9 @@ async def _generate_with_claude_impl(
     model: str | None = None,
     skip_file_based_delivery: bool = False,
     section_marker: str | None = None,
+    system_prompt: str | None = None,
+    max_turns: int | None = None,
+    effort: str | None = None,
 ) -> str:
     """Internal implementation of generate_with_claude without retry."""
     from claude_agent_sdk import (
@@ -84,7 +87,16 @@ async def _generate_with_claude_impl(
         else:
             logger.warning("File-based prompt creation failed, using original prompt")
 
-    options = ClaudeAgentOptions(permission_mode="acceptEdits", cwd=cwd, model=_model)
+    opts: dict[str, object] = {"cwd": cwd, "model": _model}
+    if system_prompt is not None:
+        opts["system_prompt"] = system_prompt
+    else:
+        opts["permission_mode"] = "acceptEdits"
+    if max_turns is not None:
+        opts["max_turns"] = max_turns
+    if effort is not None:
+        opts["effort"] = effort
+    options = ClaudeAgentOptions(**opts)
     accumulated_text = ""
     result_message: ResultMessage | None = None
 
@@ -142,6 +154,9 @@ async def generate_with_claude(
     model: str | None = None,
     skip_file_based_delivery: bool = False,
     section_marker: str | None = None,
+    system_prompt: str | None = None,
+    max_turns: int | None = None,
+    effort: str | None = None,
 ) -> str:
     """Call Claude Agent SDK to generate content.
 
@@ -151,7 +166,17 @@ async def generate_with_claude(
 
     @retry_with_backoff()
     async def _inner() -> str:
-        return await _generate_with_claude_impl(prompt, cwd, timeout, model, skip_file_based_delivery, section_marker)
+        return await _generate_with_claude_impl(
+            prompt,
+            cwd,
+            timeout,
+            model,
+            skip_file_based_delivery,
+            section_marker,
+            system_prompt=system_prompt,
+            max_turns=max_turns,
+            effort=effort,
+        )
 
     return await _inner()
 
@@ -164,19 +189,23 @@ def generate_with_progress(
     model: str | None = None,
     skip_file_based_delivery: bool = False,
     section_marker: str | None = None,
+    system_prompt: str | None = None,
+    max_turns: int | None = None,
+    effort: str | None = None,
 ) -> str:
     """Generate content with Claude showing a progress spinner."""
+    sdk_kwargs = {
+        "model": model,
+        "skip_file_based_delivery": skip_file_based_delivery,
+        "section_marker": section_marker,
+        "system_prompt": system_prompt,
+        "max_turns": max_turns,
+        "effort": effort,
+    }
+
     if console.no_color:
         console.print(message)
-        return asyncio.run(
-            generate_with_claude(
-                prompt,
-                cwd,
-                model=model,
-                skip_file_based_delivery=skip_file_based_delivery,
-                section_marker=section_marker,
-            )
-        )
+        return asyncio.run(generate_with_claude(prompt, cwd, **sdk_kwargs))
 
     with Progress(
         SpinnerColumn(),
@@ -185,15 +214,7 @@ def generate_with_progress(
         transient=True,
     ) as progress:
         progress.add_task(description=message, total=None)
-        return asyncio.run(
-            generate_with_claude(
-                prompt,
-                cwd,
-                model=model,
-                skip_file_based_delivery=skip_file_based_delivery,
-                section_marker=section_marker,
-            )
-        )
+        return asyncio.run(generate_with_claude(prompt, cwd, **sdk_kwargs))
 
 
 def generate_with_retry(
@@ -210,6 +231,9 @@ def generate_with_retry(
     post_process_fn: Callable[[str], str | None] | None = None,
     edit_suffix: str = ".md",
     max_attempts: int = 3,
+    system_prompt: str | None = None,
+    max_turns: int | None = None,
+    effort: str | None = None,
 ) -> str:
     """Generate content with retry, error handling, and fallback template support.
 
@@ -240,6 +264,9 @@ def generate_with_retry(
                 model=model,
                 skip_file_based_delivery=skip_file_based_delivery,
                 section_marker=section_marker,
+                system_prompt=system_prompt,
+                max_turns=max_turns,
+                effort=effort,
             )
             if post_process_fn is not None:
                 result_content = post_process_fn(raw)

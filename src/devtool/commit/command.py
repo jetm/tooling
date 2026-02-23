@@ -977,8 +977,13 @@ def _display_and_confirm_prompt(
 @click.option("--no-compress", is_flag=True, help="Disable diff compression")
 @click.option("--show-prompt", is_flag=True, help="Show the prompt sent to Claude")
 @click.option("--yes", "-y", is_flag=True, help="Auto-confirm the generated commit message")
+@click.option("--title-only", "-t", is_flag=True, help="Generate only a single-line commit title (implies --yes)")
 @click.option(
-    "--title-only", "-t", is_flag=True, help="Generate only a single-line commit title (implies --yes, uses haiku)"
+    "--model",
+    "-m",
+    type=click.Choice(["haiku", "sonnet", "opus"], case_sensitive=False),
+    default=None,
+    help="Model to use (default: config commit_model, usually haiku)",
 )
 @click.option("--plain-text", is_flag=True, help="Output plain text without formatting")
 @click.option("--verbose", "-v", is_flag=True, help="Enable verbose/debug logging")
@@ -989,6 +994,7 @@ def commit(
     show_prompt: bool,
     yes: bool,
     title_only: bool,
+    model: str | None,
     plain_text: bool,
     verbose: bool,
 ) -> None:
@@ -1140,6 +1146,9 @@ def commit(
 
     from devtool.common.claude import generate_with_retry
 
+    # Model resolution: --model flag > config.commit_model > config.default_model
+    effective_model = model if model is not None else config.commit_model
+
     try:
         commit_message = generate_with_retry(
             console,
@@ -1147,11 +1156,14 @@ def commit(
             str(repo.working_dir),
             fallback_template,
             "commit title" if title_only else "commit message",
-            model="haiku" if title_only else None,
+            model=effective_model,
             cleanup_fn=cleanup_prepared_file,
             skip_file_based_delivery=skip_auto_file_delivery,
             post_process_fn=post_process,
             edit_suffix=".txt",
+            system_prompt="You are a commit message generator. Output only the commit message, nothing else.",
+            max_turns=1,
+            effort="low",
         )
     except OSError as e:
         import errno

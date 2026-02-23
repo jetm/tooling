@@ -53,6 +53,7 @@ class ACAConfig:
     log_level: str = "WARNING"
     editor: str | None = None
     default_model: str = "sonnet"
+    commit_model: str = "haiku"
     # Diff compression settings
     diff_size_threshold_bytes: int = 50_000
     diff_files_threshold: int = 100
@@ -76,6 +77,7 @@ class ACAConfig:
         self.log_level = data.get("log_level", self.log_level)
         self.editor = data.get("editor", self.editor)
         self.default_model = data.get("default_model", self.default_model)
+        self.commit_model = data.get("commit_model", self.commit_model)
         self.diff_size_threshold_bytes = data.get("diff_size_threshold_bytes", self.diff_size_threshold_bytes)
         self.diff_files_threshold = data.get("diff_files_threshold", self.diff_files_threshold)
         self.diff_compression_enabled = data.get("diff_compression_enabled", self.diff_compression_enabled)
@@ -101,6 +103,7 @@ class ACAConfig:
         self.retry_attempts = _load_int_env("ACA_RETRY_ATTEMPTS", self.retry_attempts)
         self.log_level = _load_str_env("ACA_LOG_LEVEL", self.log_level).upper()
         self.default_model = _load_str_env("ACA_DEFAULT_MODEL", self.default_model)
+        self.commit_model = _load_str_env("ACA_COMMIT_MODEL", self.commit_model)
 
         # Diff compression
         self.diff_size_threshold_bytes = _load_int_env("ACA_DIFF_SIZE_THRESHOLD", self.diff_size_threshold_bytes)

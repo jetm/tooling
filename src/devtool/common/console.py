@@ -13,6 +13,9 @@ from rich.markdown import Markdown
 
 logger = logging.getLogger(__name__)
 
+_cli_version_cache: tuple[str, float] | None = None  # (version, timestamp)
+_CLI_CACHE_TTL = 36_000  # 10 hours
+
 
 def setup_logging(verbose: bool = False) -> None:
     """Configure logging based on verbosity and config."""
@@ -67,7 +70,18 @@ def check_claude_cli(console: Console) -> str | None:
     """Check if Claude Code CLI is installed and working.
 
     Returns the version string on success, None on failure.
+    Results are cached for 5 minutes to avoid repeated subprocess calls.
     """
+    global _cli_version_cache
+
+    import time
+
+    if _cli_version_cache is not None:
+        cached_version, cached_at = _cli_version_cache
+        if time.monotonic() - cached_at < _CLI_CACHE_TTL:
+            logger.debug(f"Using cached Claude CLI version: {cached_version}")
+            return cached_version
+
     if shutil.which("claude") is None:
         console.print(
             "[red]Error: Claude Code CLI not found.[/red]\n[yellow]Install it from https://claude.ai/download[/yellow]"
@@ -113,7 +127,10 @@ def check_claude_cli(console: Console) -> str | None:
 
     # Extract version string from output
     version_match = re.search(r"(\d+\.\d+\.\d+)", result.stdout.strip())
-    return version_match.group(1) if version_match else ""
+    version = version_match.group(1) if version_match else ""
+
+    _cli_version_cache = (version, time.monotonic())
+    return version
 
 
 def check_version_compatibility(console: Console, version: str | None = None) -> None:
