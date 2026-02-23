@@ -1164,6 +1164,7 @@ def commit(
             system_prompt="You are a commit message generator. Output only the commit message, nothing else.",
             max_turns=1,
             effort="low",
+            tools=[],
         )
     except OSError as e:
         import errno

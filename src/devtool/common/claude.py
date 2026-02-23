@@ -31,6 +31,7 @@ async def _generate_with_claude_impl(
     system_prompt: str | None = None,
     max_turns: int | None = None,
     effort: str | None = None,
+    tools: list[str] | None = None,
 ) -> str:
     """Internal implementation of generate_with_claude without retry."""
     from claude_agent_sdk import (
@@ -98,6 +99,8 @@ async def _generate_with_claude_impl(
         opts["max_turns"] = max_turns
     if effort is not None:
         opts["effort"] = effort
+    if tools is not None:
+        opts["tools"] = tools
     options = ClaudeAgentOptions(**opts)
     accumulated_text = ""
     result_message: ResultMessage | None = None
@@ -159,6 +162,7 @@ async def generate_with_claude(
     system_prompt: str | None = None,
     max_turns: int | None = None,
     effort: str | None = None,
+    tools: list[str] | None = None,
 ) -> str:
     """Call Claude Agent SDK to generate content.
 
@@ -178,6 +182,7 @@ async def generate_with_claude(
             system_prompt=system_prompt,
             max_turns=max_turns,
             effort=effort,
+            tools=tools,
         )
 
     return await _inner()
@@ -194,6 +199,7 @@ def generate_with_progress(
     system_prompt: str | None = None,
     max_turns: int | None = None,
     effort: str | None = None,
+    tools: list[str] | None = None,
 ) -> str:
     """Generate content with Claude showing a progress spinner."""
     sdk_kwargs = {
@@ -203,6 +209,7 @@ def generate_with_progress(
         "system_prompt": system_prompt,
         "max_turns": max_turns,
         "effort": effort,
+        "tools": tools,
     }
 
     if console.no_color:
@@ -236,6 +243,7 @@ def generate_with_retry(
     system_prompt: str | None = None,
     max_turns: int | None = None,
     effort: str | None = None,
+    tools: list[str] | None = None,
 ) -> str:
     """Generate content with retry, error handling, and fallback template support.
 
@@ -269,6 +277,7 @@ def generate_with_retry(
                 system_prompt=system_prompt,
                 max_turns=max_turns,
                 effort=effort,
+                tools=tools,
             )
             if post_process_fn is not None:
                 result_content = post_process_fn(raw)
