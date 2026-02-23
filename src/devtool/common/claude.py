@@ -55,6 +55,8 @@ async def _generate_with_claude_impl(
 
     # Monkey-patch SDK to tolerate unknown message types (e.g. rate_limit_event)
     # instead of raising MessageParseError which kills the async generator.
+    # TODO: Remove when upstream handles unknown types gracefully
+    # (see message_parser.py line 168: raise MessageParseError on unknown type).
     def _lenient_parse_message(data: dict) -> object:
         try:
             return _original_parse(data)

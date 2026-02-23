@@ -502,6 +502,7 @@ def mr_desc(ctx: click.Context, base: str | None, plain_text: bool, verbose: boo
         fallback_template,
         "MR description",
         section_marker="## Commits",
+        effort="low",
     )
 
     mr_content = clean_mr_output(mr_content)

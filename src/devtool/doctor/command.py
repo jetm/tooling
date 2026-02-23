@@ -228,6 +228,7 @@ def doctor(ctx: click.Context, full: bool, export: bool, plain_text: bool, verbo
                 cwd=str(Path.cwd()),
                 message="Testing Claude API...",
                 model="haiku",
+                effort="low",
             )
             if response and response.strip():
                 console.print(f"[green]✓[/green] Claude responded: {response.strip()[:50]}")

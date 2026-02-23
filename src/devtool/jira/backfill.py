@@ -70,6 +70,7 @@ def backfill_jira_issue(issue_key: str, diff: str, cwd: str, console: Console) -
             prompt,
             cwd,
             message="Generating Jira description...",
+            effort="low",
         )
     except Exception as e:
         logger.error(f"Claude generation failed: {e}")
