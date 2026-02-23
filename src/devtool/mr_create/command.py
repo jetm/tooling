@@ -682,6 +682,7 @@ def mr_create(ctx: click.Context, base: str | None, plain_text: bool, verbose: b
             "--remove-source-branch",
         ]
         result = subprocess.run(glab_cmd, capture_output=True, text=True, cwd=repo.working_dir)
+        mr_url = result.stdout.strip() if result.returncode == 0 else None
         if result.returncode == 0:
             console.print("[green]Merge request created successfully![/green]")
             if result.stdout:
@@ -707,6 +708,15 @@ def mr_create(ctx: click.Context, base: str | None, plain_text: bool, verbose: b
                 backfill_jira_issue(issue_key, diff, str(repo.working_dir), console)
         except Exception as e:
             console.print(f"[yellow]Warning: Jira backfill failed: {e}[/yellow]")
+
+        # Link MR to Jira issue
+        if mr_url:
+            try:
+                from devtool.jira.remote_links import link_mr_to_jira
+
+                link_mr_to_jira(issue_key, mr_url, current_branch, console)
+            except Exception as e:
+                console.print(f"[yellow]Warning: MR linking failed: {e}[/yellow]")
 
         # Transition to review status (name varies by issue type)
         try:

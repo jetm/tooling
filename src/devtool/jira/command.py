@@ -257,3 +257,13 @@ def backfill(verbose: bool) -> None:
     result = backfill_jira_issue(issue_key, diff, str(repo.working_dir), console)
     if not result:
         sys.exit(1)
+
+    # Link MR to Jira issue if an MR exists for this branch
+    try:
+        from devtool.jira.remote_links import find_mr_url_for_branch, link_mr_to_jira
+
+        mr_url = find_mr_url_for_branch(branch_name, str(repo.working_dir))
+        if mr_url:
+            link_mr_to_jira(issue_key, mr_url, branch_name, console)
+    except Exception as e:
+        console.print(f"[yellow]Warning: MR linking failed: {e}[/yellow]")
