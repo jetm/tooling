@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -10,20 +11,30 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+_MARKDOWN_HEADING_RE = re.compile(r"^(#{2,3}) (.+)$", re.MULTILINE)
+
+
+def _heading_to_jira(match: re.Match) -> str:
+    level = len(match.group(1))
+    return f"h{level}. {match.group(2)}"
+
+
 BACKFILL_PROMPT_TEMPLATE = """\
 You are analyzing a code diff to write a Jira issue summary and description.
 
 Focus on the PROBLEM that was solved, not the implementation details.
 Describe what was wrong, missing, or needed -- not how the code was changed.
 
-Output format (no markdown fences, no preamble):
+Do NOT use em dashes (—) or en dashes (–). Use plain hyphens (-) only.
+
+Output format (no markdown fences, no preamble, use Jira wiki markup):
 
 Title: <one-line summary of the problem, max 80 chars>
 
-## Problem
+h2. Problem
 <2-3 sentences describing the problem or need that motivated this change>
 
-## Acceptance Criteria
+h2. Acceptance Criteria
 <bulleted list of observable outcomes that confirm the problem is solved>
 
 ---
@@ -89,6 +100,11 @@ def backfill_jira_issue(issue_key: str, diff: str, cwd: str, console: Console) -
         description_lines = lines
 
     description = "\n".join(description_lines).strip()
+
+    # Sanitize: replace em/en dashes and convert stray markdown headings
+    title = title.replace("\u2014", "-").replace("\u2013", "-")
+    description = description.replace("\u2014", "-").replace("\u2013", "-")
+    description = _MARKDOWN_HEADING_RE.sub(_heading_to_jira, description)
 
     # Print to terminal
     console.print(f"\n[bold]Generated for {issue_key}:[/bold]")
