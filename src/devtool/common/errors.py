@@ -32,8 +32,8 @@ class ErrorContext:
     extra: dict[str, Any] = field(default_factory=dict)
 
 
-class ACAError(Exception):
-    """Base exception for all ACA errors."""
+class DevtoolError(Exception):
+    """Base exception for all devtool errors."""
 
     def __init__(
         self,
@@ -107,7 +107,7 @@ class ACAError(Exception):
         return "\n".join(lines)
 
 
-class ClaudeAuthenticationError(ACAError):
+class ClaudeAuthenticationError(DevtoolError):
     """Raised when Claude authentication fails."""
 
     def __init__(
@@ -125,7 +125,7 @@ class ClaudeAuthenticationError(ACAError):
         super().__init__(message, cause, context, troubleshooting)
 
 
-class ClaudeNetworkError(ACAError):
+class ClaudeNetworkError(DevtoolError):
     """Raised when network-related errors occur."""
 
     def __init__(
@@ -143,7 +143,7 @@ class ClaudeNetworkError(ACAError):
         super().__init__(message, cause, context, troubleshooting)
 
 
-class ClaudeCLIError(ACAError):
+class ClaudeCLIError(DevtoolError):
     """Raised when Claude CLI execution fails."""
 
     def __init__(
@@ -160,7 +160,7 @@ class ClaudeCLIError(ACAError):
         super().__init__(message, cause, context, troubleshooting)
 
 
-class ClaudeTimeoutError(ACAError):
+class ClaudeTimeoutError(DevtoolError):
     """Raised when Claude operation times out."""
 
     def __init__(
@@ -171,7 +171,7 @@ class ClaudeTimeoutError(ACAError):
         timeout_seconds: int | None = None,
     ):
         troubleshooting = [
-            f"Increase timeout (current: {timeout_seconds or 'unknown'}s) via ACA_TIMEOUT env var",
+            f"Increase timeout (current: {timeout_seconds or 'unknown'}s) via DT_TIMEOUT env var",
             "Check system resources (CPU/memory usage)",
             "Verify Claude service status at status.anthropic.com",
             "Try again with a simpler prompt",
@@ -182,7 +182,7 @@ class ClaudeTimeoutError(ACAError):
         super().__init__(message, cause, context, troubleshooting)
 
 
-class ClaudeRateLimitError(ACAError):
+class ClaudeRateLimitError(DevtoolError):
     """Raised when rate limiting is encountered."""
 
     def __init__(
@@ -204,7 +204,7 @@ class ClaudeRateLimitError(ACAError):
         super().__init__(message, cause, context, troubleshooting)
 
 
-class ClaudeContentError(ACAError):
+class ClaudeContentError(DevtoolError):
     """Raised when response content is invalid or empty."""
 
     def __init__(
@@ -274,8 +274,8 @@ def check_network_connectivity() -> tuple[bool, str | None]:
         return False, str(e)
 
 
-def _classify_error(e: Exception) -> ACAError:
-    """Classify an exception into the appropriate ACAError type."""
+def _classify_error(e: Exception) -> DevtoolError:
+    """Classify an exception into the appropriate DevtoolError type."""
     from devtool.common.config import get_config
 
     error_str = str(e).lower()

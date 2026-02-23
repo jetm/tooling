@@ -185,11 +185,11 @@ def handle_generation_error(
     Raises SystemExit if user aborts.
     """
     from devtool.common.console import print_error
-    from devtool.common.errors import RETRYABLE_EXCEPTIONS, ACAError
+    from devtool.common.errors import RETRYABLE_EXCEPTIONS, DevtoolError
 
     logger.debug(f"Full error details for {operation}:", exc_info=True)
 
-    if isinstance(error, ACAError):
+    if isinstance(error, DevtoolError):
         if console.no_color:
             console.print(error.format_error())
         else:

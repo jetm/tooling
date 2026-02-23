@@ -6,12 +6,12 @@ Shared modules used across devtool commands. Located in `src/devtool/common/`.
 
 ### `config.py` — Configuration
 
-- **`ACAConfig`** — Dataclass holding all config values (model, timeouts, compression thresholds)
-- **`get_config()`** — Load/cache config from `~/.config/aca/config.toml` and env vars
+- **`DevtoolConfig`** — Dataclass holding all config values (model, timeouts, compression thresholds)
+- **`get_config()`** — Load/cache config from `~/.config/devtool/config.toml` and env vars
 
 ### `errors.py` — Error Handling & Retry
 
-- **`ACAError`** — Base exception with context, cause, and troubleshooting steps
+- **`DevtoolError`** — Base exception with context, cause, and troubleshooting steps
 - **`ErrorContext`** — Structured error context (command, exit_code, stderr)
 - Specialized: `ClaudeAuthenticationError`, `ClaudeNetworkError`, `ClaudeCLIError`, `ClaudeTimeoutError`, `ClaudeRateLimitError`, `ClaudeContentError`
 - **`retry_with_backoff()`** — Decorator with exponential backoff and jitter
@@ -37,7 +37,7 @@ Shared modules used across devtool commands. Located in `src/devtool/common/`.
 - **`should_use_file_based_prompt()`** — Check if prompt exceeds size threshold
 - **`create_file_based_prompt()`** — Write large prompts to temp files for file-based delivery
 - **`cleanup_temp_prompt_file()`** — Clean up temp prompt files
-- Model selection: `"sonnet"`, `"opus"`, or `"haiku"` (configurable via `default_model` in config or `ACA_DEFAULT_MODEL` env var)
+- Model selection: `"sonnet"`, `"opus"`, or `"haiku"` (configurable via `default_model` in config or `DT_DEFAULT_MODEL` env var)
 
 ### `git.py` — Git Utilities
 

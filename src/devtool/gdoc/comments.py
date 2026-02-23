@@ -8,7 +8,7 @@ from pathlib import Path
 import click
 
 SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
-CONFIG_DIR = Path.home() / ".config" / "aca"
+CONFIG_DIR = Path.home() / ".config" / "devtool"
 CREDENTIALS_PATH = CONFIG_DIR / "gdoc_credentials.json"
 TOKEN_PATH = CONFIG_DIR / "gdoc_token.json"
 

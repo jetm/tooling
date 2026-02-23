@@ -173,7 +173,7 @@ def doctor(ctx: click.Context, full: bool, export: bool, plain_text: bool, verbo
 
     # Check configuration
     console.print("Checking configuration... ", end="")
-    config_path = Path.home() / ".config" / "aca" / "config.toml"
+    config_path = Path.home() / ".config" / "devtool" / "config.toml"
     if config_path.exists():
         try:
             with open(config_path, "rb") as f:
@@ -198,12 +198,12 @@ def doctor(ctx: click.Context, full: bool, export: bool, plain_text: bool, verbo
     # Check environment variables
     console.print("Checking environment variables... ", end="")
     env_vars = {
-        "ACA_TIMEOUT": os.environ.get("ACA_TIMEOUT"),
-        "ACA_RETRY_ATTEMPTS": os.environ.get("ACA_RETRY_ATTEMPTS"),
-        "ACA_LOG_LEVEL": os.environ.get("ACA_LOG_LEVEL"),
-        "ACA_DEFAULT_MODEL": os.environ.get("ACA_DEFAULT_MODEL"),
-        "ACA_DIFF_COMPRESSION_ENABLED": os.environ.get("ACA_DIFF_COMPRESSION_ENABLED"),
-        "ACA_DIFF_COMPRESSION_STRATEGY": os.environ.get("ACA_DIFF_COMPRESSION_STRATEGY"),
+        "DT_TIMEOUT": os.environ.get("DT_TIMEOUT"),
+        "DT_RETRY_ATTEMPTS": os.environ.get("DT_RETRY_ATTEMPTS"),
+        "DT_LOG_LEVEL": os.environ.get("DT_LOG_LEVEL"),
+        "DT_DEFAULT_MODEL": os.environ.get("DT_DEFAULT_MODEL"),
+        "DT_DIFF_COMPRESSION_ENABLED": os.environ.get("DT_DIFF_COMPRESSION_ENABLED"),
+        "DT_DIFF_COMPRESSION_STRATEGY": os.environ.get("DT_DIFF_COMPRESSION_STRATEGY"),
         "SKIP_PRECOMMIT": os.environ.get("SKIP_PRECOMMIT"),
     }
     active_env = {k: v for k, v in env_vars.items() if v is not None}

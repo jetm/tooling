@@ -42,8 +42,8 @@ def _load_str_env(env_name: str, current: str) -> str:
 
 
 @dataclass
-class ACAConfig:
-    """ACA configuration loaded from config file and environment."""
+class DevtoolConfig:
+    """Devtool configuration loaded from config file and environment."""
 
     retry_attempts: int = 3
     initial_delay: float = 2.0
@@ -105,49 +105,49 @@ class ACAConfig:
 
     def _load_from_env(self) -> None:
         """Apply environment variable overrides."""
-        self.timeout = _load_int_env("ACA_TIMEOUT", self.timeout)
-        self.retry_attempts = _load_int_env("ACA_RETRY_ATTEMPTS", self.retry_attempts)
-        self.log_level = _load_str_env("ACA_LOG_LEVEL", self.log_level).upper()
-        self.default_model = _load_str_env("ACA_DEFAULT_MODEL", self.default_model)
-        self.commit_model = _load_str_env("ACA_COMMIT_MODEL", self.commit_model)
+        self.timeout = _load_int_env("DT_TIMEOUT", self.timeout)
+        self.retry_attempts = _load_int_env("DT_RETRY_ATTEMPTS", self.retry_attempts)
+        self.log_level = _load_str_env("DT_LOG_LEVEL", self.log_level).upper()
+        self.default_model = _load_str_env("DT_DEFAULT_MODEL", self.default_model)
+        self.commit_model = _load_str_env("DT_COMMIT_MODEL", self.commit_model)
 
         # Diff compression
-        self.diff_size_threshold_bytes = _load_int_env("ACA_DIFF_SIZE_THRESHOLD", self.diff_size_threshold_bytes)
-        self.diff_files_threshold = _load_int_env("ACA_DIFF_FILES_THRESHOLD", self.diff_files_threshold)
+        self.diff_size_threshold_bytes = _load_int_env("DT_DIFF_SIZE_THRESHOLD", self.diff_size_threshold_bytes)
+        self.diff_files_threshold = _load_int_env("DT_DIFF_FILES_THRESHOLD", self.diff_files_threshold)
 
         # Compression enabled: long form takes precedence over short form
-        env_long = os.environ.get("ACA_DIFF_COMPRESSION_ENABLED")
-        env_short = os.environ.get("ACA_DIFF_COMPRESSION")
+        env_long = os.environ.get("DT_DIFF_COMPRESSION_ENABLED")
+        env_short = os.environ.get("DT_DIFF_COMPRESSION")
         if env_long is not None:
             self.diff_compression_enabled = env_long.lower() in _TRUTHY_VALUES
         elif env_short is not None:
             self.diff_compression_enabled = env_short.lower() in _TRUTHY_VALUES
 
         # Strategy with validation
-        if env_strategy := os.environ.get("ACA_DIFF_COMPRESSION_STRATEGY"):
+        if env_strategy := os.environ.get("DT_DIFF_COMPRESSION_STRATEGY"):
             if env_strategy in VALID_STRATEGIES:
                 self.diff_compression_strategy = env_strategy
             else:
                 logger.warning(
-                    f"Invalid ACA_DIFF_COMPRESSION_STRATEGY '{env_strategy}', "
+                    f"Invalid DT_DIFF_COMPRESSION_STRATEGY '{env_strategy}', "
                     f"using default 'compact'. Valid options: {VALID_STRATEGIES}"
                 )
 
         # Smart compression
-        self.diff_max_priority_files = _load_int_env("ACA_DIFF_MAX_PRIORITY_FILES", self.diff_max_priority_files)
-        self.diff_token_limit = _load_int_env("ACA_DIFF_TOKEN_LIMIT", self.diff_token_limit)
+        self.diff_max_priority_files = _load_int_env("DT_DIFF_MAX_PRIORITY_FILES", self.diff_max_priority_files)
+        self.diff_token_limit = _load_int_env("DT_DIFF_TOKEN_LIMIT", self.diff_token_limit)
         self.diff_smart_priority_enabled = _load_bool_env(
-            "ACA_DIFF_SMART_PRIORITY_ENABLED", self.diff_smart_priority_enabled
+            "DT_DIFF_SMART_PRIORITY_ENABLED", self.diff_smart_priority_enabled
         )
 
         # Prompt file-based delivery
-        self.prompt_file_threshold_bytes = _load_int_env("ACA_PROMPT_FILE_THRESHOLD", self.prompt_file_threshold_bytes)
-        self.prompt_file_enabled = _load_bool_env("ACA_PROMPT_FILE_ENABLED", self.prompt_file_enabled)
+        self.prompt_file_threshold_bytes = _load_int_env("DT_PROMPT_FILE_THRESHOLD", self.prompt_file_threshold_bytes)
+        self.prompt_file_enabled = _load_bool_env("DT_PROMPT_FILE_ENABLED", self.prompt_file_enabled)
 
         # OpenRouter
         self.openrouter_api_key = os.environ.get("OPENROUTER_API_KEY") or self.openrouter_api_key
-        self.openrouter_model = _load_str_env("ACA_OPENROUTER_MODEL", self.openrouter_model)
-        self.openrouter_base_url = _load_str_env("ACA_OPENROUTER_BASE_URL", self.openrouter_base_url)
+        self.openrouter_model = _load_str_env("DT_OPENROUTER_MODEL", self.openrouter_model)
+        self.openrouter_base_url = _load_str_env("DT_OPENROUTER_BASE_URL", self.openrouter_base_url)
 
     def _validate(self) -> None:
         """Validate and clamp configuration values."""
@@ -170,11 +170,11 @@ class ACAConfig:
             self.prompt_file_threshold_bytes = 50_000
 
     @classmethod
-    def load(cls) -> ACAConfig:
+    def load(cls) -> DevtoolConfig:
         """Load configuration from file and environment variables."""
         config = cls()
 
-        config_path = Path.home() / ".config" / "aca" / "config.toml"
+        config_path = Path.home() / ".config" / "devtool" / "config.toml"
         if config_path.exists():
             try:
                 with open(config_path, "rb") as f:
@@ -188,12 +188,12 @@ class ACAConfig:
         return config
 
 
-_config: ACAConfig | None = None
+_config: DevtoolConfig | None = None
 
 
-def get_config() -> ACAConfig:
+def get_config() -> DevtoolConfig:
     """Get the global configuration instance."""
     global _config
     if _config is None:
-        _config = ACAConfig.load()
+        _config = DevtoolConfig.load()
     return _config

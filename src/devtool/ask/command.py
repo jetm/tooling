@@ -195,7 +195,7 @@ def ask(ctx: click.Context, instruction: str, markdown: bool, verbose: bool) -> 
         print_error,
         setup_logging,
     )
-    from devtool.common.errors import ACAError
+    from devtool.common.errors import DevtoolError
 
     setup_logging(verbose=verbose)
     config = get_config()
@@ -214,7 +214,7 @@ def ask(ctx: click.Context, instruction: str, markdown: bool, verbose: bool) -> 
             message="Consulting Linux engineer...",
             model=config.default_model,
         )
-    except ACAError as e:
+    except DevtoolError as e:
         print_error(console, e.format_error())
         sys.exit(1)
     except Exception as e:

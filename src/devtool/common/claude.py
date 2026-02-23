@@ -16,7 +16,8 @@ if TYPE_CHECKING:
 
     from rich.console import Console
 
-    from devtool.common.config import ACAConfig
+    from devtool.common.config import DevtoolConfig
+
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +25,7 @@ logger = logging.getLogger(__name__)
 async def _generate_with_openrouter(
     prompt: str,
     system_prompt: str | None,
-    config: ACAConfig,
+    config: DevtoolConfig,
     timeout: int,
 ) -> str:
     """Call OpenRouter chat completions API directly via httpx."""
@@ -415,7 +416,7 @@ def generate_with_retry(
 # ---- File-based prompt delivery ----
 
 
-def should_use_file_based_prompt(prompt: str, config: ACAConfig) -> bool:
+def should_use_file_based_prompt(prompt: str, config: DevtoolConfig) -> bool:
     """Determine if file-based prompt delivery should be used."""
     if not config.prompt_file_enabled:
         return False
@@ -432,18 +433,18 @@ def should_use_file_based_prompt(prompt: str, config: ACAConfig) -> bool:
     return False
 
 
-def write_prompt_to_tempfile(content: str, prefix: str = "aca_prompt_", target_dir: str | None = None) -> str:
+def write_prompt_to_tempfile(content: str, prefix: str = "devtool_prompt_", target_dir: str | None = None) -> str:
     """Write prompt content to a temporary file."""
     try:
         temp_dir = None
         if target_dir:
-            aca_tmp_dir = Path(target_dir) / ".aca" / "tmp"
+            devtool_tmp_dir = Path(target_dir) / ".devtool" / "tmp"
             try:
-                aca_tmp_dir.mkdir(parents=True, exist_ok=True)
-                temp_dir = str(aca_tmp_dir)
+                devtool_tmp_dir.mkdir(parents=True, exist_ok=True)
+                temp_dir = str(devtool_tmp_dir)
                 logger.debug(f"Using repo-local temp directory: {temp_dir}")
             except OSError as e:
-                logger.warning(f"Failed to create repo temp directory {aca_tmp_dir}: {e}, using system temp")
+                logger.warning(f"Failed to create repo temp directory {devtool_tmp_dir}: {e}, using system temp")
                 temp_dir = None
 
         fd = tempfile.NamedTemporaryFile(  # noqa: SIM115
@@ -505,7 +506,9 @@ def create_file_based_prompt(
             logger.warning("Section content is empty, skipping file-based delivery")
             return None
 
-        temp_file_path = write_prompt_to_tempfile(section_content.strip(), prefix="aca_content_", target_dir=target_dir)
+        temp_file_path = write_prompt_to_tempfile(
+            section_content.strip(), prefix="devtool_content_", target_dir=target_dir
+        )
 
         modified_prompt = f"""{header}{marker}{format_note}
 
@@ -528,7 +531,7 @@ After reading the file, analyze the content and follow the instructions above.
     # Fallback: no marker found — write entire prompt to file
     logger.info(f"Marker '{marker}' not found in prompt, falling back to full prompt file-based delivery")
 
-    temp_file_path = write_prompt_to_tempfile(original_prompt, prefix="aca_full_prompt_", target_dir=target_dir)
+    temp_file_path = write_prompt_to_tempfile(original_prompt, prefix="devtool_full_prompt_", target_dir=target_dir)
 
     modified_prompt = f"""Please read and follow the instructions in the file below.
 

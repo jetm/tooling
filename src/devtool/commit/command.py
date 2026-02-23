@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     import git
     from rich.console import Console
 
-    from devtool.common.config import ACAConfig
+    from devtool.common.config import DevtoolConfig
 
 logger = logging.getLogger(__name__)
 
@@ -256,7 +256,7 @@ def extract_diff_statistics(repo: git.Repo) -> dict[str, int]:
     return result
 
 
-def should_compress_diff(diff_size: dict[str, int], config: ACAConfig) -> bool:
+def should_compress_diff(diff_size: dict[str, int], config: DevtoolConfig) -> bool:
     """Determine if diff compression should be applied based on thresholds."""
     return diff_size["bytes"] > config.diff_size_threshold_bytes or diff_size["files"] > config.diff_files_threshold
 
@@ -316,7 +316,7 @@ def compress_diff_function_context(repo: git.Repo) -> str:
     return result if result else "No changes staged"
 
 
-def compress_diff_smart(repo: git.Repo, config: ACAConfig) -> tuple[str, int, int, int]:
+def compress_diff_smart(repo: git.Repo, config: DevtoolConfig) -> tuple[str, int, int, int]:
     """Compress diff using smart file prioritization."""
     import git as gitmodule
 
@@ -417,7 +417,7 @@ def apply_compression_strategy(
     repo: git.Repo,
     strategy: str,
     original_diff: str,
-    config: ACAConfig | None = None,
+    config: DevtoolConfig | None = None,
 ) -> tuple[str, dict[str, int | str]]:
     """Apply the specified compression strategy to the diff."""
     import git as gitmodule
@@ -781,7 +781,7 @@ def _detect_staged_changes(repo: git.Repo, console: Console) -> tuple[str, str, 
 def _apply_compression(
     diff_output: str,
     repo: git.Repo,
-    config: ACAConfig,
+    config: DevtoolConfig,
     console: Console,
     no_compress: bool,
 ) -> tuple[str, dict[str, int | str] | None, str]:
@@ -1091,11 +1091,11 @@ def commit(
             f"[yellow]The prompt exceeds the recommended {max_prompt_size_kb} KB limit. "
             "Consider using a more aggressive compression strategy (e.g., 'stat' or 'smart').[/yellow]"
         )
-        console.print("[dim]Tip: Set ACA_DIFF_COMPRESSION_STRATEGY=stat for maximum compression[/dim]")
+        console.print("[dim]Tip: Set DT_DIFF_COMPRESSION_STRATEGY=stat for maximum compression[/dim]")
         console.print()
 
         if compression_info is None:
-            console.print("[dim]Tip: Set ACA_DIFF_COMPRESSION_ENABLED=true to enable automatic compression[/dim]")
+            console.print("[dim]Tip: Set DT_DIFF_COMPRESSION_ENABLED=true to enable automatic compression[/dim]")
             console.print()
     else:
         logger.debug(f"Prompt size within limits: {prompt_size_kb:.1f} KB")
@@ -1238,7 +1238,7 @@ def _fallback_compression_info(diff_output: str) -> dict[str, int | str]:
     }
 
 
-def _print_argmax_error(console: Console, config: ACAConfig) -> None:
+def _print_argmax_error(console: Console, config: DevtoolConfig) -> None:
     """Print ARG_MAX exceeded error with guidance."""
     console.print()
     console.print("[red bold]Error: Prompt too large for command-line delivery[/red bold]")
@@ -1249,16 +1249,16 @@ def _print_argmax_error(console: Console, config: ACAConfig) -> None:
     )
     console.print()
     console.print("[bold]Possible solutions:[/bold]")
-    console.print("  1. Ensure file-based delivery is enabled: ACA_PROMPT_FILE_ENABLED=true")
-    console.print("  2. Use a more aggressive compression strategy: ACA_DIFF_COMPRESSION_STRATEGY=stat")
+    console.print("  1. Ensure file-based delivery is enabled: DT_PROMPT_FILE_ENABLED=true")
+    console.print("  2. Use a more aggressive compression strategy: DT_DIFF_COMPRESSION_STRATEGY=stat")
     console.print("  3. Stage fewer files and commit in smaller batches")
     console.print()
     if not config.prompt_file_enabled:
         console.print(
-            "[cyan]File-based delivery is currently DISABLED. Enable it with: ACA_PROMPT_FILE_ENABLED=true[/cyan]"
+            "[cyan]File-based delivery is currently DISABLED. Enable it with: DT_PROMPT_FILE_ENABLED=true[/cyan]"
         )
     else:
         console.print(
             "[dim]File-based delivery is enabled but may have failed. "
-            "Check logs with ACA_LOG_LEVEL=DEBUG for details.[/dim]"
+            "Check logs with DT_LOG_LEVEL=DEBUG for details.[/dim]"
         )
