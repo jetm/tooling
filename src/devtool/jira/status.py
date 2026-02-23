@@ -25,6 +25,9 @@ def transition_jira_issue(issue_key: str, status_name: str) -> bool:
 
     Returns:
         True if the transition succeeded, False otherwise.
+
+    Raises:
+        ValueError: If the target status is not reachable from the current status.
     """
     from devtool.jira.client import connect_jira
 
@@ -34,6 +37,15 @@ def transition_jira_issue(issue_key: str, status_name: str) -> bool:
     if current_status == status_name:
         logger.debug(f"{issue_key} is already in '{status_name}'")
         return True
+
+    transitions = jira_client.get_issue_transitions(issue_key)
+    available = [t["to"] for t in transitions]
+    if not any(status_name.lower() == name.lower() for name in available):
+        available_str = ", ".join(available) or "none"
+        raise ValueError(
+            f"Cannot transition {issue_key} from '{current_status}' to '{status_name}'. "
+            f"Available transitions: {available_str}"
+        )
 
     try:
         jira_client.set_issue_status(issue_key, status_name)

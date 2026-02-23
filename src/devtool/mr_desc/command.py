@@ -699,11 +699,17 @@ def mr_desc(ctx: click.Context, base: str | None, plain_text: bool, verbose: boo
         except Exception as e:
             console.print(f"[yellow]Warning: Jira backfill failed: {e}[/yellow]")
 
-        # Transition to Peer Review
+        # Transition to review status (name varies by issue type)
         try:
             from devtool.jira.status import transition_jira_issue
 
-            transition_jira_issue(issue_key, "Peer Review")
-            console.print(f"[green]{issue_key}[/green] -> Peer Review")
+            review_names = ["Peer Review", "Review"]
+            for name in review_names:
+                try:
+                    transition_jira_issue(issue_key, name)
+                    console.print(f"[green]{issue_key}[/green] -> {name}")
+                    break
+                except ValueError:
+                    continue
         except Exception as e:
             console.print(f"[yellow]Warning: Jira status transition failed: {e}[/yellow]")
