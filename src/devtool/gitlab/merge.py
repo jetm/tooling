@@ -16,7 +16,10 @@ console = Console()
 @click.command()
 @click.argument("mr_url")
 @click.option("--token", type=str, default=None, help="GitLab token (or set GITLAB_TOKEN env var)")
-def merge(mr_url: str, token: str | None) -> None:
+@click.option(
+    "--force-rebase", is_flag=True, default=False, help="Rebase even when detailed_merge_status says it is not needed"
+)
+def merge(mr_url: str, token: str | None, force_rebase: bool) -> None:
     """Approve and merge a GitLab merge request.
 
     MR_URL is the full GitLab merge request URL
@@ -91,66 +94,9 @@ def merge(mr_url: str, token: str | None) -> None:
             except GitlabAuthenticationError:
                 logger.info("MR already approved (or author-approval blocked), continuing")
 
-            # Rebase before merge (required for fast-forward merge strategy)
-            console.print("[bold yellow]Rebasing MR...[/bold yellow]")
-            gl.http_put(f"/projects/{project.id}/merge_requests/{mr_iid}/rebase")
-            for _ in range(60):
-                time.sleep(2)
-                mr_data = gl.http_get(
-                    f"/projects/{project.id}/merge_requests/{mr_iid}",
-                    query_data={"include_rebase_in_progress": True},
-                )
-                if not mr_data.get("rebase_in_progress", False):
-                    break
-            else:
-                raise click.ClickException("Rebase timed out after 120s")
-            if mr_data.get("merge_error"):
-                raise click.ClickException(f"Rebase failed: {mr_data['merge_error']}")
-            logger.info("MR rebased")
-
-            # Re-approve after rebase (rebase resets approvals if "reset on push" is enabled)
-            console.print("[bold blue]Re-approving MR after rebase...[/bold blue]")
-            try:
-                gl.http_post(f"/projects/{project.id}/merge_requests/{mr_iid}/approve")
-                logger.info("MR re-approved")
-            except GitlabAuthenticationError:
-                logger.info("MR already approved, continuing")
-
-            # Restore branch protection BEFORE merge so the pipeline sees a protected branch
-            # (CI rules like $CI_COMMIT_REF_PROTECTED depend on protection status at pipeline start)
-            if was_protected:
-                console.print(f"[bold yellow]Restoring protection on '{target_branch}'...[/bold yellow]")
-                project.protectedbranches.create(
-                    {
-                        "name": target_branch,
-                        "push_access_level": 0,
-                        "merge_access_level": 30,
-                        "allow_force_push": False,
-                        "code_owner_approval_required": False,
-                    }
-                )
-                logger.info(f"Branch '{target_branch}' re-protected")
-                console.print(
-                    f"[bold green]Protection restored on '{target_branch}' in {project_path}[/bold green]\n"
-                    f"[dim]push=none, merge=dev+maintainer, force_push=off, code_owner=off[/dim]"
-                )
-
-            # Wait for head pipeline to be created after rebase
-            console.print("[bold yellow]Waiting for pipeline after rebase...[/bold yellow]")
-            for attempt in range(30):
-                mr_data = gl.http_get(f"/projects/{project.id}/merge_requests/{mr_iid}")
-                head_pipeline = mr_data.get("head_pipeline")
-                if head_pipeline:
-                    logger.info(f"Pipeline #{head_pipeline['id']} found (status: {head_pipeline['status']})")
-                    break
-                if attempt > 0 and attempt % 5 == 0:
-                    logger.info(f"Still waiting for pipeline ({attempt * 2}s)...")
-                time.sleep(2)
-            else:
-                raise click.ClickException("No pipeline created after rebase (timed out after 60s)")
-
-            # Wait for MR merge status to be computed after rebase
-            console.print("[bold yellow]Waiting for merge status check...[/bold yellow]")
+            # Determine whether a rebase is needed by checking detailed_merge_status.
+            # Poll until the status settles out of transient states.
+            console.print("[bold yellow]Checking merge status...[/bold yellow]")
             for attempt in range(30):
                 mr_data = gl.http_get(f"/projects/{project.id}/merge_requests/{mr_iid}")
                 merge_status = mr_data.get("detailed_merge_status", "unknown")
@@ -162,6 +108,112 @@ def merge(mr_url: str, token: str | None) -> None:
                 time.sleep(2)
             else:
                 raise click.ClickException("Merge status check timed out after 60s")
+
+            if merge_status == "conflict":
+                raise click.ClickException(
+                    f"MR has conflicts (detailed_merge_status={merge_status!r}) - resolve conflicts before merging"
+                )
+
+            needs_rebase = merge_status not in ("mergeable", "ci_must_pass", "ci_still_running")
+            if needs_rebase or force_rebase:
+                if force_rebase and not needs_rebase:
+                    logger.info(f"--force-rebase set; rebasing despite status={merge_status!r}")
+                elif merge_status != "need_rebase":
+                    logger.info(f"Unrecognised merge status {merge_status!r}, rebasing as safe default")
+
+                # Rebase before merge (required for semi-linear history or when forced)
+                console.print("[bold yellow]Rebasing MR...[/bold yellow]")
+                gl.http_put(f"/projects/{project.id}/merge_requests/{mr_iid}/rebase")
+                for _ in range(60):
+                    time.sleep(2)
+                    mr_data = gl.http_get(
+                        f"/projects/{project.id}/merge_requests/{mr_iid}",
+                        query_data={"include_rebase_in_progress": True},
+                    )
+                    if not mr_data.get("rebase_in_progress", False):
+                        break
+                else:
+                    raise click.ClickException("Rebase timed out after 120s")
+                if mr_data.get("merge_error"):
+                    raise click.ClickException(f"Rebase failed: {mr_data['merge_error']}")
+                logger.info("MR rebased")
+
+                # Re-approve after rebase (rebase resets approvals if "reset on push" is enabled)
+                console.print("[bold blue]Re-approving MR after rebase...[/bold blue]")
+                try:
+                    gl.http_post(f"/projects/{project.id}/merge_requests/{mr_iid}/approve")
+                    logger.info("MR re-approved")
+                except GitlabAuthenticationError:
+                    logger.info("MR already approved, continuing")
+
+                # Restore branch protection BEFORE merge so the pipeline sees a protected branch
+                # (CI rules like $CI_COMMIT_REF_PROTECTED depend on protection status at pipeline start)
+                if was_protected:
+                    console.print(f"[bold yellow]Restoring protection on '{target_branch}'...[/bold yellow]")
+                    project.protectedbranches.create(
+                        {
+                            "name": target_branch,
+                            "push_access_level": 0,
+                            "merge_access_level": 30,
+                            "allow_force_push": False,
+                            "code_owner_approval_required": False,
+                        }
+                    )
+                    logger.info(f"Branch '{target_branch}' re-protected")
+                    console.print(
+                        f"[bold green]Protection restored on '{target_branch}' in {project_path}[/bold green]\n"
+                        f"[dim]push=none, merge=dev+maintainer, force_push=off, code_owner=off[/dim]"
+                    )
+
+                # Wait for head pipeline to be created after rebase
+                console.print("[bold yellow]Waiting for pipeline after rebase...[/bold yellow]")
+                for attempt in range(30):
+                    mr_data = gl.http_get(f"/projects/{project.id}/merge_requests/{mr_iid}")
+                    head_pipeline = mr_data.get("head_pipeline")
+                    if head_pipeline:
+                        logger.info(f"Pipeline #{head_pipeline['id']} found (status: {head_pipeline['status']})")
+                        break
+                    if attempt > 0 and attempt % 5 == 0:
+                        logger.info(f"Still waiting for pipeline ({attempt * 2}s)...")
+                    time.sleep(2)
+                else:
+                    raise click.ClickException("No pipeline created after rebase (timed out after 60s)")
+
+                # Wait for MR merge status to be computed after rebase
+                console.print("[bold yellow]Waiting for merge status check after rebase...[/bold yellow]")
+                for attempt in range(30):
+                    mr_data = gl.http_get(f"/projects/{project.id}/merge_requests/{mr_iid}")
+                    merge_status = mr_data.get("detailed_merge_status", "unknown")
+                    if merge_status not in ("checking", "approvals_syncing"):
+                        logger.info(f"Merge status after rebase: {merge_status}")
+                        break
+                    if attempt > 0 and attempt % 5 == 0:
+                        logger.info(f"Still waiting for merge status (currently: {merge_status}, {attempt * 2}s)...")
+                    time.sleep(2)
+                else:
+                    raise click.ClickException("Merge status check timed out after 60s")
+
+            else:
+                console.print(f"[bold green]Rebase not needed ({merge_status!r}), skipping[/bold green]")
+
+                # Restore branch protection BEFORE merge so the pipeline sees a protected branch
+                # (CI rules like $CI_COMMIT_REF_PROTECTED depend on protection status at pipeline start)
+                if was_protected:
+                    console.print(f"[bold yellow]Restoring protection on '{target_branch}'...[/bold yellow]")
+                    project.protectedbranches.create(
+                        {
+                            "name": target_branch,
+                            "push_access_level": 0,
+                            "merge_access_level": 30,
+                            "allow_force_push": False,
+                            "code_owner_approval_required": False,
+                        }
+                    )
+                    logger.info(f"Branch '{target_branch}' re-protected")
+                    console.print(
+                        f"[bold green]Protection restored on '{target_branch}' in {project_path}[/bold green]\n"
+                        f"[dim]push=none, merge=dev+maintainer, force_push=off, code_owner=off[/dim]"
+                    )
 
             # Merge the MR (use merge_when_pipeline_succeeds if immediate merge fails)
             console.print("[bold blue]Merging MR...[/bold blue]")
