@@ -33,12 +33,16 @@ def create_child_issue(jira_client, project_key: str, parent_key: str, parent_ty
     if child_type is None:
         raise ValueError(f"Cannot create child issue under '{parent_type}' (expected Epic or Story)")
 
+    me = jira_client.myself()
+    account_id = me["accountId"]
+
     fields = {
         "project": {"key": project_key},
         "summary": "TBD",
         "description": "TBD",
         "issuetype": {"name": child_type},
         "parent": {"key": parent_key},
+        "assignee": {"accountId": account_id},
     }
 
     logger.debug(f"Creating {child_type} under {parent_key} in project {project_key}")
