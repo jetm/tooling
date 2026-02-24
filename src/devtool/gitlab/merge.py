@@ -179,22 +179,21 @@ def merge(mr_url: str | None, token: str | None, force_rebase: bool) -> None:
 
                 # Restore branch protection BEFORE merge so the pipeline sees a protected branch
                 # (CI rules like $CI_COMMIT_REF_PROTECTED depend on protection status at pipeline start)
-                if was_protected:
-                    console.print(f"[bold yellow]Restoring protection on '{target_branch}'...[/bold yellow]")
-                    project.protectedbranches.create(
-                        {
-                            "name": target_branch,
-                            "push_access_level": 0,
-                            "merge_access_level": 30,
-                            "allow_force_push": False,
-                            "code_owner_approval_required": False,
-                        }
-                    )
-                    logger.info(f"Branch '{target_branch}' re-protected")
-                    console.print(
-                        f"[bold green]Protection restored on '{target_branch}' in {project_path}[/bold green]\n"
-                        f"[dim]push=none, merge=dev+maintainer, force_push=off, code_owner=off[/dim]"
-                    )
+                console.print(f"[bold yellow]Ensuring protection on '{target_branch}'...[/bold yellow]")
+                project.protectedbranches.create(
+                    {
+                        "name": target_branch,
+                        "push_access_level": 0,
+                        "merge_access_level": 30,
+                        "allow_force_push": False,
+                        "code_owner_approval_required": False,
+                    }
+                )
+                logger.info(f"Branch '{target_branch}' protected")
+                console.print(
+                    f"[bold green]Protection ensured on '{target_branch}' in {project_path}[/bold green]\n"
+                    f"[dim]push=none, merge=dev+maintainer, force_push=off, code_owner=off[/dim]"
+                )
 
                 # Wait for head pipeline to be created after rebase
                 console.print("[bold yellow]Waiting for pipeline after rebase...[/bold yellow]")
@@ -227,24 +226,23 @@ def merge(mr_url: str | None, token: str | None, force_rebase: bool) -> None:
             else:
                 console.print(f"[bold green]Rebase not needed ({merge_status!r}), skipping[/bold green]")
 
-                # Restore branch protection BEFORE merge so the pipeline sees a protected branch
+                # Ensure branch protection BEFORE merge so the pipeline sees a protected branch
                 # (CI rules like $CI_COMMIT_REF_PROTECTED depend on protection status at pipeline start)
-                if was_protected:
-                    console.print(f"[bold yellow]Restoring protection on '{target_branch}'...[/bold yellow]")
-                    project.protectedbranches.create(
-                        {
-                            "name": target_branch,
-                            "push_access_level": 0,
-                            "merge_access_level": 30,
-                            "allow_force_push": False,
-                            "code_owner_approval_required": False,
-                        }
-                    )
-                    logger.info(f"Branch '{target_branch}' re-protected")
-                    console.print(
-                        f"[bold green]Protection restored on '{target_branch}' in {project_path}[/bold green]\n"
-                        f"[dim]push=none, merge=dev+maintainer, force_push=off, code_owner=off[/dim]"
-                    )
+                console.print(f"[bold yellow]Ensuring protection on '{target_branch}'...[/bold yellow]")
+                project.protectedbranches.create(
+                    {
+                        "name": target_branch,
+                        "push_access_level": 0,
+                        "merge_access_level": 30,
+                        "allow_force_push": False,
+                        "code_owner_approval_required": False,
+                    }
+                )
+                logger.info(f"Branch '{target_branch}' protected")
+                console.print(
+                    f"[bold green]Protection ensured on '{target_branch}' in {project_path}[/bold green]\n"
+                    f"[dim]push=none, merge=dev+maintainer, force_push=off, code_owner=off[/dim]"
+                )
 
             # Merge the MR (use merge_when_pipeline_succeeds if immediate merge fails)
             console.print("[bold blue]Merging MR...[/bold blue]")
@@ -299,26 +297,25 @@ def merge(mr_url: str | None, token: str | None, force_rebase: bool) -> None:
             except Exception as e:
                 logger.error(f"Failed to restore author-approval setting: {e}")
 
-            # Ensure branch protection is restored even if we failed before the merge step
-            if was_protected:
-                try:
-                    project.protectedbranches.get(target_branch)
-                except GitlabGetError:
-                    console.print(f"[bold yellow]Restoring protection on '{target_branch}' (cleanup)...[/bold yellow]")
-                    project.protectedbranches.create(
-                        {
-                            "name": target_branch,
-                            "push_access_level": 0,
-                            "merge_access_level": 30,
-                            "allow_force_push": False,
-                            "code_owner_approval_required": False,
-                        }
-                    )
-                    logger.info(f"Branch '{target_branch}' re-protected (cleanup)")
-                    console.print(
-                        f"[bold green]Protection restored on '{target_branch}' in {project_path}[/bold green]\n"
-                        f"[dim]push=none, merge=dev+maintainer, force_push=off, code_owner=off[/dim]"
-                    )
+            # Ensure branch protection is always present (even if we failed before the merge step)
+            try:
+                project.protectedbranches.get(target_branch)
+            except GitlabGetError:
+                console.print(f"[bold yellow]Ensuring protection on '{target_branch}' (cleanup)...[/bold yellow]")
+                project.protectedbranches.create(
+                    {
+                        "name": target_branch,
+                        "push_access_level": 0,
+                        "merge_access_level": 30,
+                        "allow_force_push": False,
+                        "code_owner_approval_required": False,
+                    }
+                )
+                logger.info(f"Branch '{target_branch}' protected (cleanup)")
+                console.print(
+                    f"[bold green]Protection ensured on '{target_branch}' in {project_path}[/bold green]\n"
+                    f"[dim]push=none, merge=dev+maintainer, force_push=off, code_owner=off[/dim]"
+                )
 
         console.print(f"[bold green]Successfully merged !{mr_iid} - {mr.title}[/bold green]")
 
