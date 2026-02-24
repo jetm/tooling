@@ -15,9 +15,10 @@ console = Console()
 
 def _detect_mr_url() -> str:
     """Auto-detect the MR URL for the current branch via glab."""
-    import git
-
+    from devtool._deps import require
     from devtool.jira.remote_links import find_mr_url_for_branch
+
+    git = require("git", "merge")
 
     try:
         repo = git.Repo(search_parent_directories=True)

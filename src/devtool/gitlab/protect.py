@@ -10,15 +10,15 @@ from pathlib import Path
 import click
 from rich.console import Console
 
-from devtool.gitlab import connect_gitlab, get_gitlab_token, parse_project_url
+from devtool.gitlab import connect_gitlab, detect_project_path, get_gitlab_token, parse_project_url
 
 logger = logging.getLogger(__name__)
 console = Console()
 
 # Constants
-STATE_DIR = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state")) / "gitlab-lean"
+STATE_DIR = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state")) / "devtool"
 STATE_PATH = STATE_DIR / "force-push.toml"
-FORCE_PUSH_BRANCH = "stage"
+DEFAULT_BRANCH = "stage"
 
 
 def read_force_push_config() -> dict | None:
@@ -31,11 +31,11 @@ def read_force_push_config() -> dict | None:
     return tomllib.loads(content)
 
 
-def write_force_push_config(project_path: str) -> None:
+def write_force_push_config(project_path: str, branch: str) -> None:
     """Write force-push state to the TOML state file (tracks that protection was removed)."""
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     now = datetime.now(UTC).isoformat()
-    content = f'project_path = "{project_path}"\nenabled_at = "{now}"\n'
+    content = f'project_path = "{project_path}"\nbranch = "{branch}"\nenabled_at = "{now}"\n'
     STATE_PATH.write_text(content)
 
 
@@ -48,17 +48,24 @@ def clear_force_push_config() -> None:
 @click.option(
     "--project-url",
     type=str,
-    required=True,
-    help="GitLab project URL (e.g., https://gitlab.com/group/project)",
+    default=None,
+    help="GitLab project URL (e.g., https://gitlab.com/group/project). Auto-detected from git remote if omitted.",
 )
+@click.option("--branch", type=str, default=DEFAULT_BRANCH, help=f"Branch to protect (default: {DEFAULT_BRANCH}).")
 @click.option("--token", type=str, default=None, help="GitLab token (or set GITLAB_TOKEN env var)")
-def protect(project_url: str, token: str | None) -> None:
-    """Restore stage branch protection with hardcoded safe defaults."""
+def protect(project_url: str | None, branch: str, token: str | None) -> None:
+    """Restore branch protection with hardcoded safe defaults."""
     from gitlab import GitlabAuthenticationError, GitlabGetError
 
-    project_path = parse_project_url(project_url)
-    if not project_path:
-        raise click.ClickException("Invalid GitLab project URL format. Expected: https://gitlab.com/{group}/{project}")
+    if project_url:
+        project_path = parse_project_url(project_url)
+        if not project_path:
+            raise click.ClickException(
+                "Invalid GitLab project URL format. Expected: https://gitlab.com/{group}/{project}"
+            )
+    else:
+        project_path = detect_project_path()
+        console.print(f"[bold]Auto-detected project:[/bold] {project_path}")
 
     # Read saved state
     saved = read_force_push_config()
@@ -70,6 +77,12 @@ def protect(project_url: str, token: str | None) -> None:
             f"Project mismatch: saved state is for '{saved['project_path']}', but you specified '{project_path}'."
         )
 
+    saved_branch = saved.get("branch", DEFAULT_BRANCH)
+    if saved_branch != branch:
+        raise click.ClickException(
+            f"Branch mismatch: saved state is for '{saved_branch}', but you specified '{branch}'."
+        )
+
     try:
         resolved_token = get_gitlab_token(token)
         gl = connect_gitlab(resolved_token)
@@ -79,9 +92,9 @@ def protect(project_url: str, token: str | None) -> None:
 
         # Verify branch is currently unprotected
         try:
-            project.protectedbranches.get(FORCE_PUSH_BRANCH)
+            project.protectedbranches.get(branch)
             raise click.ClickException(
-                f"Branch '{FORCE_PUSH_BRANCH}' is already protected in {project_path}. "
+                f"Branch '{branch}' is already protected in {project_path}. "
                 f"Clear state with 'unprotect' first if needed."
             )
         except GitlabGetError:
@@ -92,24 +105,24 @@ def protect(project_url: str, token: str | None) -> None:
         #   Allowed to merge: Developers + Maintainers (30)
         #   Allowed to force push: disabled
         #   Code owner approval: disabled
-        console.print(f"[bold yellow]Restoring protection on '{FORCE_PUSH_BRANCH}'...[/bold yellow]")
+        console.print(f"[bold yellow]Restoring protection on '{branch}'...[/bold yellow]")
         project.protectedbranches.create(
             {
-                "name": FORCE_PUSH_BRANCH,
+                "name": branch,
                 "push_access_level": 0,
                 "merge_access_level": 30,
                 "allow_force_push": False,
                 "code_owner_approval_required": False,
             }
         )
-        logger.info(f"Branch '{FORCE_PUSH_BRANCH}' re-protected")
+        logger.info(f"Branch '{branch}' re-protected")
 
         # Clear config AFTER successful API call
         clear_force_push_config()
         logger.info(f"Cleared state from {STATE_PATH}")
 
         console.print(
-            f"[bold green]Protection restored on '{FORCE_PUSH_BRANCH}' in {project_path}[/bold green]\n"
+            f"[bold green]Protection restored on '{branch}' in {project_path}[/bold green]\n"
             f"[dim]push=none, merge=dev+maintainer, force_push=off, code_owner=off[/dim]"
         )
 
@@ -127,17 +140,24 @@ def protect(project_url: str, token: str | None) -> None:
 @click.option(
     "--project-url",
     type=str,
-    required=True,
-    help="GitLab project URL (e.g., https://gitlab.com/group/project)",
+    default=None,
+    help="GitLab project URL (e.g., https://gitlab.com/group/project). Auto-detected from git remote if omitted.",
 )
+@click.option("--branch", type=str, default=DEFAULT_BRANCH, help=f"Branch to unprotect (default: {DEFAULT_BRANCH}).")
 @click.option("--token", type=str, default=None, help="GitLab token (or set GITLAB_TOKEN env var)")
-def unprotect(project_url: str, token: str | None) -> None:
-    """Temporarily allow force-push by removing stage from protected branches."""
+def unprotect(project_url: str | None, branch: str, token: str | None) -> None:
+    """Temporarily allow force-push by removing a branch from protected branches."""
     from gitlab import GitlabAuthenticationError, GitlabGetError
 
-    project_path = parse_project_url(project_url)
-    if not project_path:
-        raise click.ClickException("Invalid GitLab project URL format. Expected: https://gitlab.com/{group}/{project}")
+    if project_url:
+        project_path = parse_project_url(project_url)
+        if not project_path:
+            raise click.ClickException(
+                "Invalid GitLab project URL format. Expected: https://gitlab.com/{group}/{project}"
+            )
+    else:
+        project_path = detect_project_path()
+        console.print(f"[bold]Auto-detected project:[/bold] {project_path}")
 
     # Check existing state
     existing = read_force_push_config()
@@ -157,23 +177,23 @@ def unprotect(project_url: str, token: str | None) -> None:
 
         # Get the protected branch
         try:
-            branch = project.protectedbranches.get(FORCE_PUSH_BRANCH)
+            protected = project.protectedbranches.get(branch)
         except GitlabGetError as err:
             raise click.ClickException(
-                f"Branch '{FORCE_PUSH_BRANCH}' is not protected in {project_path}. Already unprotected."
+                f"Branch '{branch}' is not protected in {project_path}. Already unprotected."
             ) from err
 
         # Save state BEFORE removing protection (safe on failure)
-        write_force_push_config(project_path)
+        write_force_push_config(project_path, branch)
         logger.info(f"Saved state to {STATE_PATH}")
 
         # Remove branch protection entirely to allow force-push
-        console.print(f"[bold yellow]Removing protection from '{FORCE_PUSH_BRANCH}'...[/bold yellow]")
-        branch.delete()
-        logger.info(f"Branch '{FORCE_PUSH_BRANCH}' unprotected")
+        console.print(f"[bold yellow]Removing protection from '{branch}'...[/bold yellow]")
+        protected.delete()
+        logger.info(f"Branch '{branch}' unprotected")
 
         console.print(
-            f"[bold green]Protection removed from '{FORCE_PUSH_BRANCH}' in {project_path}[/bold green]\n"
+            f"[bold green]Protection removed from '{branch}' in {project_path}[/bold green]\n"
             f"[dim]State saved to {STATE_PATH}. Run 'protect' to restore protection.[/dim]"
         )
 

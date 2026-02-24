@@ -17,6 +17,8 @@ logger = logging.getLogger(__name__)
 DEFAULT_GITLAB_URL = "https://gitlab.com"
 MR_URL_PATTERN = re.compile(r"https://gitlab\.com/(.+?)/-/merge_requests/(\d+)")
 PROJECT_URL_PATTERN = re.compile(r"https://gitlab\.com/(.+?)/?$")
+REMOTE_SSH_PATTERN = re.compile(r"git@gitlab\.com:(.+?)(?:\.git)?$")
+REMOTE_HTTPS_PATTERN = re.compile(r"https://gitlab\.com/(.+?)(?:\.git)?/?$")
 
 
 def parse_mr_url(url: str) -> tuple[str, int] | None:
@@ -33,6 +35,38 @@ def parse_project_url(url: str) -> str | None:
     if not match:
         return None
     return match.group(1)
+
+
+def detect_project_path() -> str:
+    """Detect GitLab project path from the current repo's origin remote URL.
+
+    Supports both SSH (git@gitlab.com:path) and HTTPS (https://gitlab.com/path) formats.
+    Raises ClickException if not in a git repo or remote is not gitlab.com.
+    """
+    from devtool._deps import require
+
+    git = require("git", "gitlab commands")
+
+    try:
+        repo = git.Repo(search_parent_directories=True)
+    except git.exc.InvalidGitRepositoryError:
+        raise click.ClickException("Not in a git repository. Use --project-url to specify the project.") from None
+
+    if not repo.remotes or "origin" not in [r.name for r in repo.remotes]:
+        raise click.ClickException("No 'origin' remote found. Use --project-url to specify the project.")
+
+    origin_url = repo.remotes.origin.url
+
+    for pattern in (REMOTE_SSH_PATTERN, REMOTE_HTTPS_PATTERN):
+        match = pattern.match(origin_url)
+        if match:
+            project_path = match.group(1)
+            logger.info(f"Auto-detected project path: {project_path}")
+            return project_path
+
+    raise click.ClickException(
+        f"Origin remote '{origin_url}' is not a gitlab.com URL. Use --project-url to specify the project."
+    )
 
 
 def get_gitlab_token(cli_token: str | None = None) -> str:
