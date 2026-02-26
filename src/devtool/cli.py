@@ -7,6 +7,8 @@ from devtool.ask.command import ask
 from devtool.commit.command import commit
 from devtool.doctor.command import doctor
 from devtool.gdoc.comments import gdoc_comments
+from devtool.gdoc.resolve import gdoc_resolve
+from devtool.gdoc.upload import gdoc_upload
 from devtool.git.switch_main import switch_main
 from devtool.gitlab.comments import comments
 from devtool.gitlab.merge import merge
@@ -27,6 +29,8 @@ cli.add_command(comments)
 cli.add_command(commit)
 cli.add_command(doctor)
 cli.add_command(gdoc_comments, "gdoc-comments")
+cli.add_command(gdoc_resolve, "gdoc-resolve")
+cli.add_command(gdoc_upload, "gdoc-upload")
 cli.add_command(jira)
 cli.add_command(merge)
 cli.add_command(mr_create, "mr-create")
